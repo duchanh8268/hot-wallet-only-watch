@@ -1,0 +1,36 @@
+# Strict allowlist: only Hot Wallet (hot_wallet_web), shared core (cardano_core),
+# and GitHub Actions workflows may be tracked. Cold Wallet (apps/cold_wallet_app),
+# offline/, online/, binaries, docs, and local scripts are NEVER pushed to GitHub.
+/*
+!.gitignore
+!.github/
+!apps/
+apps/*
+!apps/hot_wallet_web/
+!packages/
+packages/*
+!packages/cardano_core/
+
+# Dart / Flutter build & tooling artifacts
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/pubspec.lock
+
+# Secrets, keys, and local configs
+**/.env
+**/*.env
+**/*.jks
+**/*.keystore
+**/key.properties
+**/*.apk
+**/*.aab
+
+# OS / IDE / temp files
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/*.tmp
+**/*.log

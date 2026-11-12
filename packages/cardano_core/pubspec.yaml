@@ -1,0 +1,16 @@
+name: cardano_core
+description: Pure Dart cryptographic, Conway Era CBOR, SEC-01 security audit, and BC-UR Fountain Code library for Cardano Air-Gapped Wallets.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  crypto: ^3.0.6
+  pointycastle: ^3.9.1
+  typed_data: ^1.4.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
