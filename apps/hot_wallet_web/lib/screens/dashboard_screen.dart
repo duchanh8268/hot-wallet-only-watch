@@ -319,6 +319,79 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _showUpdateDialog(BuildContext context) {
+    final s = widget.appState.strings;
+    final info = widget.appState.latestVersion;
+    if (info == null) return;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: HotTheme.surfaceElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.system_update, color: HotTheme.primary),
+            const SizedBox(width: 8),
+            Text(s.updateAvailableTitle),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${s.appVersionLabel}: ${HotAppState.currentVersion} → ${info.version} (build ${info.buildNumber})'),
+            const SizedBox(height: 8),
+            if (info.releaseNotes.isNotEmpty) ...[
+              Text('${s.releaseNotesLabel}:', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(info.releaseNotes, style: const TextStyle(color: HotTheme.textSecondary, fontSize: 13)),
+              const SizedBox(height: 12),
+            ],
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: HotTheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.verified_user, color: Colors.greenAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      s.dataBackupPreservedNotice,
+                      style: const TextStyle(fontSize: 12, color: Colors.greenAccent),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text(s.cancel),
+          ),
+          ElevatedButton(
+            key: const Key('confirm_update_now_btn'),
+            onPressed: () async {
+              Navigator.of(dialogCtx).pop();
+              await widget.appState.applyWebUpdate();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: HotTheme.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(s.updateNowBtn),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = widget.appState.strings;
@@ -389,6 +462,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (widget.appState.hasUpdateAvailable)
+          Container(
+            key: const Key('update_available_banner'),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade900.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.amberAccent.withValues(alpha: 0.8)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.system_update_alt, color: Colors.amberAccent),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    s.updateAvailableBanner(widget.appState.latestVersion?.version ?? ''),
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ),
+                FilledButton.tonal(
+                  key: const Key('banner_update_now_btn'),
+                  onPressed: () => _showUpdateDialog(context),
+                  child: Text(s.updateNowBtn),
+                ),
+              ],
+            ),
+          ),
         if (widget.appState.activeProjectId.trim().isEmpty) ...[
           Container(
             padding: const EdgeInsets.all(12),

@@ -112,10 +112,27 @@ class _BroadcastFlowScreenState extends State<BroadcastFlowScreen> {
           setState(() => _scanError = 'Request ID mismatch with active transaction!');
           return;
         }
+        Set<String>? expectedVKeyHashesHex;
+        final activeProfile = widget.appState.activeProfile;
+        if (activeProfile != null) {
+          final acctPub = CardanoAccountPublicKey.fromBech32(
+            activeProfile.acctXvkBech32,
+          );
+          final signReq = widget.buildResult.signRequest;
+          expectedVKeyHashesHex = <String>{
+            for (final u in signReq.utxoInputs)
+              hexEncode(
+                acctPub.deriveKeyHash(u.derivationRole, u.derivationIndex),
+              ),
+            if (signReq.requireStakeWitness)
+              hexEncode(acctPub.deriveStakeKeyHash()),
+          };
+        }
         final assembled = ConwayTxSerializer.assembleSignedTransaction(
           txBodyCbor: widget.buildResult.signRequest.txBodyCbor,
           witnesses: signResp.vkeyWitnesses,
           verifySignatures: true,
+          expectedVKeyHashesHex: expectedVKeyHashesHex,
         );
         setState(() {
           _signedTxCbor = assembled;

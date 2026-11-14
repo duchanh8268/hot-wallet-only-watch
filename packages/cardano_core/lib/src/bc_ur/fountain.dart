@@ -225,6 +225,11 @@ class _MixedPart {
 
 /// Fountain Decoder supporting out-of-order, partial, and lossy packet streams.
 class FountainDecoder {
+  static const int maxAllowedSeqLen = 2048;
+  static const int maxAllowedMessageLen = 262144; // 256 KB
+  static const int maxAllowedFragmentLen = 4096;
+  static const int maxMixedParts = 512;
+
   int? _expectedSeqLen;
   int? _expectedMessageLen;
   int? _expectedChecksum;
@@ -258,10 +263,16 @@ class FountainDecoder {
   bool receivePart(FountainPart part) {
     if (_result != null) return true;
 
+    if (part.seqLen <= 0 ||
+        part.seqLen > maxAllowedSeqLen ||
+        part.messageLen < 0 ||
+        part.messageLen > maxAllowedMessageLen ||
+        part.data.isEmpty ||
+        part.data.length > maxAllowedFragmentLen) {
+      return false;
+    }
+
     if (_expectedSeqLen == null) {
-      if (part.seqLen <= 0 || part.messageLen < 0 || part.data.isEmpty) {
-        return false;
-      }
       _expectedSeqLen = part.seqLen;
       _expectedMessageLen = part.messageLen;
       _expectedChecksum = part.checksum;
@@ -293,9 +304,11 @@ class FountainDecoder {
     if (reduced.indexes.length == 1) {
       final idx = reduced.indexes.first;
       _enqueueSolved(idx, reduced.data);
-    } else {
+    } else if (_mixedParts.length < maxMixedParts) {
       _mixedParts.add(reduced);
       _tryGaussianSolve();
+    } else {
+      return false;
     }
 
     _checkCompletion();

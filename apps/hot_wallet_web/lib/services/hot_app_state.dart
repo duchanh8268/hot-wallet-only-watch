@@ -7,13 +7,21 @@ import '../l10n/app_strings.dart';
 import 'blockfrost_service.dart';
 import 'conway_tx_builder.dart';
 import 'hd_wallet_sync_service.dart';
+import 'update_service.dart';
 import 'web_crypto_storage.dart';
+import 'web_reload_helper.dart';
 
 class HotAppState extends ChangeNotifier {
+  static const String currentVersion = '1.0.0';
+  static const int currentBuildNumber = 1;
+  static const int currentSchemaVersion = 1;
   static const String _storageKey = 'hot_wallet_config_v1';
+  static const String _backupStorageKey = 'hot_wallet_config_backup';
 
   final WebCryptoStorage storage;
   final BlockfrostService blockfrost;
+  final UpdateCheckService updateService;
+  final SchemaMigrationRunner migrationRunner = SchemaMigrationRunner();
   late final HdWalletSyncService syncService;
 
   CardanoNetwork _network = CardanoNetwork.preprod; // Default: Preprod
@@ -38,11 +46,17 @@ class HotAppState extends ChangeNotifier {
   WalletSyncState? _syncState;
   TxBuildResult? _lastBuiltTx;
 
+  AppVersionInfo? _latestVersion;
+  bool _checkingUpdate = false;
+  String? _updateStatusMessage;
+
   HotAppState({
     WebCryptoStorage? storage,
     BlockfrostService? blockfrost,
+    UpdateCheckService? updateService,
   })  : storage = storage ?? WebCryptoStorage(),
-        blockfrost = blockfrost ?? BlockfrostService() {
+        blockfrost = blockfrost ?? BlockfrostService(),
+        updateService = updateService ?? UpdateCheckService() {
     syncService = HdWalletSyncService(this.blockfrost);
   }
 
@@ -56,6 +70,16 @@ class HotAppState extends ChangeNotifier {
   WalletSyncState? get syncState => _syncState;
   TxBuildResult? get lastBuiltTx => _lastBuiltTx;
   bool get isWebCryptoActive => storage.isWebCryptoActive;
+
+  AppVersionInfo? get latestVersion => _latestVersion;
+  bool get checkingUpdate => _checkingUpdate;
+  String? get updateStatusMessage => _updateStatusMessage;
+  bool get hasUpdateAvailable =>
+      _latestVersion != null &&
+      _latestVersion!.isNewerThan(
+        currentVersion: currentVersion,
+        currentBuildNumber: currentBuildNumber,
+      );
 
   void setLastBuiltTx(TxBuildResult? tx) {
     _lastBuiltTx = tx;
@@ -78,11 +102,75 @@ class HotAppState extends ChangeNotifier {
     return matching.first;
   }
 
+  Future<void> createStorageSnapshot() async {
+    final raw = await storage.loadEncrypted(_storageKey);
+    if (raw != null && raw.isNotEmpty) {
+      await storage.saveEncrypted(_backupStorageKey, raw);
+    }
+  }
+
+  Future<bool> hasStorageSnapshot() async {
+    final raw = await storage.loadEncrypted(_backupStorageKey);
+    return raw != null && raw.isNotEmpty;
+  }
+
+  Future<void> restoreStorageSnapshot() async {
+    final raw = await storage.loadEncrypted(_backupStorageKey);
+    if (raw != null && raw.isNotEmpty) {
+      await storage.saveEncrypted(_storageKey, raw);
+      await init();
+    }
+  }
+
+  Future<void> checkForUpdates({String? url}) async {
+    _checkingUpdate = true;
+    _updateStatusMessage = null;
+    notifyListeners();
+    try {
+      final info = await updateService.fetchLatestVersion(url: url ?? 'version.json');
+      _latestVersion = info;
+      if (hasUpdateAvailable) {
+        _updateStatusMessage = strings.updateAvailableNotice(info!.version);
+      } else {
+        _updateStatusMessage = strings.alreadyLatestVersion;
+      }
+    } catch (e) {
+      _updateStatusMessage = e.toString();
+    } finally {
+      _checkingUpdate = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> applyWebUpdate({void Function()? onReload}) async {
+    await createStorageSnapshot();
+    if (onReload != null) {
+      onReload();
+    } else {
+      reloadWebApp();
+    }
+  }
+
   Future<void> init() async {
     try {
       final raw = await storage.loadEncrypted(_storageKey);
       if (raw != null && raw.isNotEmpty) {
-        final json = jsonDecode(raw) as Map<String, dynamic>;
+        var json = jsonDecode(raw) as Map<String, dynamic>;
+        final existingSchema = (json['schemaVersion'] as num?)?.toInt() ?? 1;
+        if (existingSchema < currentSchemaVersion) {
+          await createStorageSnapshot();
+          try {
+            json = migrationRunner.migrate(
+              data: json,
+              targetVersion: currentSchemaVersion,
+            );
+            await storage.saveEncrypted(_storageKey, jsonEncode(json));
+          } catch (_) {
+            await restoreStorageSnapshot();
+            rethrow;
+          }
+        }
+
         final netId = json['selectedNetwork'] as String?;
         if (netId != null) {
           _network = CardanoNetwork.fromId(netId);
@@ -123,6 +211,7 @@ class HotAppState extends ChangeNotifier {
 
   Future<void> _persist() async {
     final payload = jsonEncode({
+      'schemaVersion': currentSchemaVersion,
       'selectedNetwork': _network.id,
       'locale': _locale.name,
       'gapLimit': _gapLimit,

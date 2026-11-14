@@ -151,4 +151,21 @@ class HotStrings {
   String get close => isVi ? 'Đóng' : 'Close';
   String get cancel => isVi ? 'Hủy' : 'Cancel';
   String get save => isVi ? 'Lưu' : 'Save';
+
+  // Version & Updates
+  String updateAvailableBanner(String version) =>
+      isVi ? 'Đã có bản cập nhật mới v$version! Bấm để cập nhật ngay.' : 'New version v$version available! Click to update now.';
+  String get updateAvailableTitle => isVi ? 'Có phiên bản mới' : 'New Version Available';
+  String get updateNowBtn => isVi ? 'Cập nhật ngay (Bảo toàn dữ liệu)' : 'Update Now (Preserve Data)';
+  String get checkUpdatesBtn => isVi ? 'Kiểm tra cập nhật' : 'Check for Updates';
+  String get checkingUpdates => isVi ? 'Đang kiểm tra cập nhật...' : 'Checking for updates...';
+  String get alreadyLatestVersion => isVi ? 'Bạn đang sử dụng phiên bản mới nhất.' : 'You are running the latest version.';
+  String updateAvailableNotice(String version) =>
+      isVi ? 'Đã có phiên bản v$version mới nhất.' : 'Latest version v$version is available.';
+  String get versionInfoTitle => isVi ? 'Thông tin phiên bản & Cập nhật' : 'Version & Updates';
+  String get appVersionLabel => isVi ? 'Phiên bản ứng dụng' : 'App Version';
+  String get releaseNotesLabel => isVi ? 'Thông tin cập nhật' : 'Release Notes';
+  String get dataBackupPreservedNotice => isVi
+      ? 'Dữ liệu ví và danh mục theo dõi sẽ được sao lưu an toàn và tự động tương thích.'
+      : 'Wallet profiles and watch-only settings are safely backed up and preserved.';
 }

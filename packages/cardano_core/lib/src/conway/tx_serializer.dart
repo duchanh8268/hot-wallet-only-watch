@@ -177,6 +177,19 @@ class ConwayTxSerializer {
       throw const FormatException('TxBody CBOR must be a map');
     }
 
+    const supportedKeys = <int>{0, 1, 2, 3, 4, 5, 8};
+    for (final entry in root.entries) {
+      final key = entry.key;
+      if (key is! CborInt ||
+          key.value < BigInt.zero ||
+          key.value > BigInt.from(8) ||
+          !supportedKeys.contains(key.toInt())) {
+        throw FormatException(
+          'Unsupported or unknown Conway TxBody CBOR key: $key',
+        );
+      }
+    }
+
     // 0: inputs
     final rawInputs = _unwrapSet(root.getByIntKey(0));
     if (rawInputs == null) {
@@ -268,6 +281,7 @@ class ConwayTxSerializer {
     required Uint8List txBodyCbor,
     required List<VKeyWitness> witnesses,
     bool verifySignatures = true,
+    Set<String>? expectedVKeyHashesHex,
   }) {
     if (witnesses.isEmpty) {
       throw ArgumentError('At least one VKeyWitness is required');
@@ -276,12 +290,31 @@ class ConwayTxSerializer {
     final txBodyHash = computeTxBodyHash(txBodyCbor);
     // Deduplicate witnesses by vkey
     final deduped = <String, VKeyWitness>{};
+    final seenVKeyHashes = <String>{};
     for (final w in witnesses) {
+      final vkeyHashHex = hexEncode(blake2b224(w.vkey));
+      if (expectedVKeyHashesHex != null &&
+          !expectedVKeyHashesHex.contains(vkeyHashHex)) {
+        throw StateError(
+          'Unexpected VKeyWitness hash not belonging to transaction signers: $vkeyHashHex',
+        );
+      }
       if (verifySignatures &&
           !Ed25519.verify(w.vkey, txBodyHash, w.signature)) {
         throw StateError('Invalid VKeyWitness signature for ${hexEncode(w.vkey)}');
       }
+      seenVKeyHashes.add(vkeyHashHex);
       deduped[hexEncode(w.vkey)] = w;
+    }
+
+    if (expectedVKeyHashesHex != null) {
+      for (final requiredHash in expectedVKeyHashesHex) {
+        if (!seenVKeyHashes.contains(requiredHash)) {
+          throw StateError(
+            'Missing required VKeyWitness for expected key hash: $requiredHash',
+          );
+        }
+      }
     }
 
     final witnessSet = CborMap([

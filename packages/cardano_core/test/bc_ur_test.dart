@@ -61,6 +61,34 @@ void main() {
       expect(decoder.result!.type, 'cardano-sign-request');
       expect(decoder.result!.cborPayload, equals(payload));
     });
+
+    test('FountainDecoder rejects oversized seqLen and messageLen to prevent DoS', () {
+      final dec = FountainDecoder();
+      expect(
+        dec.receivePart(
+          FountainPart(
+            seqNum: 1,
+            seqLen: FountainDecoder.maxAllowedSeqLen + 1,
+            messageLen: 64,
+            checksum: 123,
+            data: Uint8List(32),
+          ),
+        ),
+        isFalse,
+      );
+      expect(
+        dec.receivePart(
+          FountainPart(
+            seqNum: 1,
+            seqLen: 10,
+            messageLen: FountainDecoder.maxAllowedMessageLen + 1,
+            checksum: 123,
+            data: Uint8List(32),
+          ),
+        ),
+        isFalse,
+      );
+    });
   });
 
   group('Cardano BC-UR Messages Round-Trip', () {

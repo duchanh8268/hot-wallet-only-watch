@@ -43,7 +43,7 @@ class WatchOnlyProfile {
       network: CardanoNetwork.fromId(json['network'] as String),
       acctXvkBech32: json['acctXvkBech32'] as String,
       accountIndex: (json['accountIndex'] as num?)?.toInt() ?? 0,
-      createdAtMs: (json['createdAtMs'] as num).toInt(),
+      createdAtMs: (json['createdAtMs'] as num?)?.toInt() ?? 0,
     );
   }
 }

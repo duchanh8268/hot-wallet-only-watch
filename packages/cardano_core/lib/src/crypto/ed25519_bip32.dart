@@ -115,6 +115,8 @@ class ExtendedPrivateKey {
     zeroize(cInput);
 
     final childBytes = Uint8List(96);
+    Uint8List? childKL;
+    Uint8List? childKR;
     try {
       // V2: child_kL = kL + 8 * zL (where zL = Z[0..28])
       final zL = _bytesToBigIntLe(Uint8List.sublistView(zMac, 0, 28));
@@ -126,21 +128,24 @@ class ExtendedPrivateKey {
       if ((childKLInt % _orderL) == BigInt.zero) {
         throw StateError('Derived child kL is congruent to 0 mod L');
       }
-      final childKL = _bigIntToBytesLe(childKLInt, 32);
+      childKL = _bigIntToBytesLe(childKLInt, 32);
 
       // child_kR = (kR + zR) mod 2^256
       final zR = _bytesToBigIntLe(Uint8List.sublistView(zMac, 32, 64));
       final kRInt = _bytesToBigIntLe(kR);
       final childKRInt = (kRInt + zR) & _mask256;
-      final childKR = _bigIntToBytesLe(childKRInt, 32);
+      childKR = _bigIntToBytesLe(childKRInt, 32);
 
       childBytes.setRange(0, 32, childKL);
       childBytes.setRange(32, 64, childKR);
       childBytes.setRange(64, 96, Uint8List.sublistView(cMac, 32, 64));
 
-      zeroizeAll([zMac, cMac, childKL, childKR]);
       return ExtendedPrivateKey(childBytes);
     } finally {
+      zeroize(zMac);
+      zeroize(cMac);
+      zeroize(childKL);
+      zeroize(childKR);
       zeroize(childBytes);
     }
   }
@@ -154,23 +159,47 @@ class ExtendedPrivateKey {
   }
 
   /// Signs [message] using extended key `(kL, kR)` producing a 64-byte Ed25519 signature.
-  Uint8List sign(Uint8List message) {
+  /// Optional [auxRand] mixes additional hedged entropy into nonce generation when provided.
+  Uint8List sign(Uint8List message, {Uint8List? auxRand}) {
     final pub = publicKey;
-    final rDigest = sha512.convert(concatBytes([kR, message])).bytes;
-    final r = _bytesToBigIntLe(Uint8List.fromList(rDigest)) % _orderL;
-    final rPoint = _encodePoint(_scalarMultBase(r));
+    Uint8List? rInput;
+    Uint8List? rDigestBytes;
+    Uint8List? hInput;
+    Uint8List? hDigestBytes;
+    Uint8List? sBytes;
+    try {
+      rInput = (auxRand != null && auxRand.isNotEmpty)
+          ? concatBytes([kR, auxRand, message])
+          : concatBytes([kR, message]);
+      rDigestBytes = Uint8List.fromList(sha512.convert(rInput).bytes);
+      final r = _bytesToBigIntLe(rDigestBytes) % _orderL;
+      final rPoint = _encodePoint(_scalarMultBase(r));
 
-    final hDigest = sha512.convert(concatBytes([rPoint, pub, message])).bytes;
-    final h = _bytesToBigIntLe(Uint8List.fromList(hDigest)) % _orderL;
+      hInput = concatBytes([rPoint, pub, message]);
+      hDigestBytes = Uint8List.fromList(sha512.convert(hInput).bytes);
+      final h = _bytesToBigIntLe(hDigestBytes) % _orderL;
 
-    final kLInt = _bytesToBigIntLe(kL);
-    final s = (r + (h * kLInt)) % _orderL;
-    final sBytes = _bigIntToBytesLe(s, 32);
+      final kLInt = _bytesToBigIntLe(kL);
+      final s = (r + (h * kLInt)) % _orderL;
+      sBytes = _bigIntToBytesLe(s, 32);
 
-    final sig = Uint8List(64);
-    sig.setRange(0, 32, rPoint);
-    sig.setRange(32, 64, sBytes);
-    return sig;
+      final sig = Uint8List(64);
+      sig.setRange(0, 32, rPoint);
+      sig.setRange(32, 64, sBytes);
+
+      // Verify-Before-Output countermeasure against fault injection / bit-flip attacks
+      if (!Ed25519.verify(pub, message, sig)) {
+        zeroize(sig);
+        throw StateError('Ed25519 fault check failed: generated signature did not verify');
+      }
+      return sig;
+    } finally {
+      zeroize(rInput);
+      zeroize(rDigestBytes);
+      zeroize(hInput);
+      zeroize(hDigestBytes);
+      zeroize(sBytes);
+    }
   }
 
   /// Overwrites internal secret key material with zeros.
@@ -223,7 +252,7 @@ class ExtendedPublicKey {
   }
 }
 
-/// Ed25519 signature verification (RFC 8032 cofactor-8 equation).
+/// Ed25519 signature verification (RFC 8032 cofactor-8 equation with small-order public key rejection).
 class Ed25519 {
   static bool verify(
     Uint8List publicKey,
@@ -235,6 +264,12 @@ class Ed25519 {
     }
     try {
       final aPoint = _decodePoint(publicKey);
+      // Reject small-order / torsion public keys ([8]A == Identity)
+      final a8 = _scalarMultSmall(aPoint, 8);
+      if (constantTimeEquals(_encodePoint(a8), _encodePoint(_EdPoint.identity))) {
+        return false;
+      }
+
       final rBytes = Uint8List.sublistView(signature, 0, 32);
       final sBytes = Uint8List.sublistView(signature, 32, 64);
       final rPoint = _decodePoint(rBytes);
@@ -366,8 +401,22 @@ _EdPoint _scalarMult(_EdPoint p, BigInt k) {
   var result = _EdPoint.identity;
   var addend = p;
   var scalar = k;
-  while (scalar > BigInt.zero) {
-    if (scalar.isOdd) {
+  final bitCount = scalar >= _twoPow256 ? scalar.bitLength : 256;
+  for (var i = 0; i < bitCount; i++) {
+    final selected = scalar.isOdd ? addend : _EdPoint.identity;
+    result = _pointAdd(result, selected);
+    addend = _pointDouble(addend);
+    scalar >>= 1;
+  }
+  return result;
+}
+
+_EdPoint _scalarMultSmall(_EdPoint p, int k) {
+  var result = _EdPoint.identity;
+  var addend = p;
+  var scalar = k;
+  while (scalar > 0) {
+    if ((scalar & 1) == 1) {
       result = _pointAdd(result, addend);
     }
     addend = _pointDouble(addend);
@@ -375,9 +424,6 @@ _EdPoint _scalarMult(_EdPoint p, BigInt k) {
   }
   return result;
 }
-
-_EdPoint _scalarMultSmall(_EdPoint p, int k) =>
-    _scalarMult(p, BigInt.from(k));
 
 List<List<_EdPoint>>? _baseNibbleTable;
 
@@ -405,21 +451,17 @@ List<List<_EdPoint>> _getBaseNibbleTable() {
 }
 
 _EdPoint _scalarMultBase(BigInt k) {
-  if (k <= BigInt.zero) return _EdPoint.identity;
-  if (k >= _twoPow256) {
+  if (k < BigInt.zero || k >= _twoPow256) {
     return _scalarMult(_basePoint, k);
   }
   final table = _getBaseNibbleTable();
   var result = _EdPoint.identity;
   var scalar = k;
-  var w = 0;
-  while (scalar > BigInt.zero) {
-    final nib = (scalar & BigInt.from(0x0f)).toInt();
-    if (nib != 0) {
-      result = _pointAdd(result, table[w][nib]);
-    }
+  final mask4 = BigInt.from(0x0f);
+  for (var w = 0; w < 64; w++) {
+    final nib = (scalar & mask4).toInt();
+    result = _pointAdd(result, table[w][nib]);
     scalar >>= 4;
-    w++;
   }
   return result;
 }
@@ -447,7 +489,11 @@ _EdPoint _decodePoint(Uint8List bytes) {
     throw const FormatException('Invalid Ed25519 point: y >= p');
   }
   final x = _recoverX(y, signBit);
-  return _EdPoint(x, y, BigInt.one, (x * y) % _p);
+  final pt = _EdPoint(x, y, BigInt.one, (x * y) % _p);
+  if (!constantTimeEquals(_encodePoint(pt), bytes)) {
+    throw const FormatException('Invalid Ed25519 point: non-canonical encoding');
+  }
+  return pt;
 }
 
 Uint8List _hmacSha512(Uint8List key, Uint8List data) {

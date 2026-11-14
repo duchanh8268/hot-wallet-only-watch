@@ -23,6 +23,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    widget.appState.addListener(_onAppStateChanged);
     _controllers = {
       for (final net in CardanoNetwork.values)
         net: TextEditingController(text: widget.appState.projectIdFor(net)),
@@ -30,8 +31,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _gapLimit = widget.appState.gapLimit;
   }
 
+  void _onAppStateChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    widget.appState.removeListener(_onAppStateChanged);
     for (final c in _controllers.values) {
       c.dispose();
     }
@@ -208,7 +214,141 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Text(s.saveSettingsBtn),
           ),
         ),
+        const SizedBox(height: 24),
+        Text(
+          s.versionInfoTitle,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(s.appVersionLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    Text(
+                      'v${HotAppState.currentVersion}+${HotAppState.currentBuildNumber}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: HotTheme.primary),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('check_updates_btn'),
+                      onPressed: widget.appState.checkingUpdate
+                          ? null
+                          : () => widget.appState.checkForUpdates(),
+                      icon: widget.appState.checkingUpdate
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: 18),
+                      label: Text(s.checkUpdatesBtn),
+                    ),
+                    const SizedBox(width: 12),
+                    if (widget.appState.hasUpdateAvailable)
+                      FilledButton.icon(
+                        key: const Key('apply_update_btn'),
+                        onPressed: () => _showUpdateDialog(context),
+                        icon: const Icon(Icons.system_update_alt, size: 18),
+                        label: Text(s.updateNowBtn),
+                      ),
+                  ],
+                ),
+                if (widget.appState.updateStatusMessage != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.appState.updateStatusMessage!,
+                    key: const Key('update_status_msg'),
+                    style: const TextStyle(fontSize: 12, color: HotTheme.textSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ],
+    );
+  }
+
+  void _showUpdateDialog(BuildContext context) {
+    final s = widget.appState.strings;
+    final info = widget.appState.latestVersion;
+    if (info == null) return;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: HotTheme.surfaceElevated,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.system_update, color: HotTheme.primary),
+            const SizedBox(width: 8),
+            Text(s.updateAvailableTitle),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${s.appVersionLabel}: ${HotAppState.currentVersion} → ${info.version} (build ${info.buildNumber})'),
+            const SizedBox(height: 8),
+            if (info.releaseNotes.isNotEmpty) ...[
+              Text('${s.releaseNotesLabel}:', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(info.releaseNotes, style: const TextStyle(color: HotTheme.textSecondary, fontSize: 13)),
+              const SizedBox(height: 12),
+            ],
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: HotTheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.verified_user, color: Colors.greenAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      s.dataBackupPreservedNotice,
+                      style: const TextStyle(fontSize: 12, color: Colors.greenAccent),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text(s.cancel),
+          ),
+          ElevatedButton(
+            key: const Key('confirm_update_now_btn'),
+            onPressed: () async {
+              Navigator.of(dialogCtx).pop();
+              await widget.appState.applyWebUpdate();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: HotTheme.primary,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(s.updateNowBtn),
+          ),
+        ],
+      ),
     );
   }
 }

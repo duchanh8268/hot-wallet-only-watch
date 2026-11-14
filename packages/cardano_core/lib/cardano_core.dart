@@ -20,3 +20,5 @@ export 'src/bc_ur/xoshiro256.dart';
 export 'src/bc_ur/fountain.dart';
 export 'src/bc_ur/ur_codec.dart';
 export 'src/bc_ur/cardano_ur_messages.dart';
+
+export 'src/migration/schema_migration.dart';

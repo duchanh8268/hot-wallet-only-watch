@@ -191,5 +191,45 @@ void main() {
       expect(master.rootKey.bytes.every((b) => b == 0), isTrue);
       zeroize(entropy);
     });
+
+    test('Rejects small-order and non-canonical public keys in Ed25519.verify', () {
+      final msg = Uint8List.fromList([1, 2, 3]);
+      final zeroSig = Uint8List(64);
+      // Identity point in Ed25519 compressed form: y = 1, x = 0 -> [0x01, 0, ..., 0]
+      final identityPub = Uint8List(32)..[0] = 0x01;
+      expect(Ed25519.verify(identityPub, msg, zeroSig), isFalse);
+
+      // Known 2-torsion / small-order point (0, p - 1) -> y = p - 1 = [0xec, 0xff, ..., 0x7f]
+      final torsionPub = Uint8List.fromList(List<int>.filled(32, 0xff))
+        ..[0] = 0xec
+        ..[31] = 0x7f;
+      expect(Ed25519.verify(torsionPub, msg, zeroSig), isFalse);
+
+      // Non-canonical point: x = 0 (y = 1) with sign bit set to 1
+      final nonCanonicalZeroPub = Uint8List(32)
+        ..[0] = 0x01
+        ..[31] = 0x80;
+      expect(Ed25519.verify(nonCanonicalZeroPub, msg, zeroSig), isFalse);
+    });
+
+    test('Ed25519-BIP32 hedged signing with auxRand verifies cleanly', () {
+      final entropy = Bip39.mnemonicToEntropy(cip3Mnemonic);
+      final master = CardanoMasterKey.fromEntropy(entropy);
+      final payKey = master.deriveAddressSigningKey(role: 0, index: 0);
+      try {
+        final msg = blake2b256(Uint8List.fromList([9, 8, 7]));
+        final aux = Uint8List.fromList(List<int>.generate(32, (i) => i + 1));
+        final sigDet = payKey.sign(msg);
+        final sigHedged = payKey.sign(msg, auxRand: aux);
+        expect(sigHedged.length, 64);
+        expect(sigHedged, isNot(equals(sigDet)));
+        expect(Ed25519.verify(payKey.publicKey, msg, sigDet), isTrue);
+        expect(Ed25519.verify(payKey.publicKey, msg, sigHedged), isTrue);
+      } finally {
+        payKey.dispose();
+        master.dispose();
+        zeroize(entropy);
+      }
+    });
   });
 }

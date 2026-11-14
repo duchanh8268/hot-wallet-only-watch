@@ -435,5 +435,115 @@ void main() {
         ),
       );
     });
+
+    test('Audits valid transaction using only accountPublicKey without masterKey', () {
+      final req = buildValidTransfer();
+      final acctPub = walletKey.exportAccountPublicKey();
+      final report = Sec01Guard.audit(
+        request: req,
+        accountPublicKey: acctPub,
+        expectedNetwork: CardanoNetwork.preprod,
+      );
+      expect(report.externalOutputs.length, 1);
+      expect(report.verifiedChangeOutputs.length, 1);
+    });
+
+    test('Blocks hardened derivation index (>= 0x80000000) in UTXO input or change', () {
+      final valid = buildValidTransfer();
+      final badInput = CardanoSignRequestUr(
+        requestId: valid.requestId,
+        network: valid.network,
+        txBodyCbor: valid.txBodyCbor,
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: valid.utxoInputs.first.txHash,
+            outputIndex: 0,
+            addressBytes: valid.utxoInputs.first.addressBytes,
+            lovelace: valid.utxoInputs.first.lovelace,
+            derivationRole: 0,
+            derivationIndex: 0x80000000,
+          ),
+        ],
+        changeOutputs: valid.changeOutputs,
+        requireStakeWitness: false,
+      );
+      expect(
+        () => Sec01Guard.audit(
+          request: badInput,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.unauthorizedInputAddress,
+          ),
+        ),
+      );
+
+      final badChange = CardanoSignRequestUr(
+        requestId: valid.requestId,
+        network: valid.network,
+        txBodyCbor: valid.txBodyCbor,
+        utxoInputs: valid.utxoInputs,
+        changeOutputs: const [
+          UrChangeOutputRef(txOutputIndex: 1, internalIndex: 0x80000000),
+        ],
+        requireStakeWitness: false,
+      );
+      expect(
+        () => Sec01Guard.audit(
+          request: badChange,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.invalidChangeIndex,
+          ),
+        ),
+      );
+    });
+
+    test('Blocks non-canonical TxBody CBOR (e.g. non-shortest integer encoding)', () {
+      final valid = buildValidTransfer();
+      // Encode identical TxBody with key 8 using non-canonical 1-byte uint (0x18 0x00 instead of 0x00)
+      final decodedMap = CborValue.decode(valid.txBodyCbor) as CborMap;
+      final builder = BytesBuilder(copy: false);
+      // Map with same number of items, manually write non-canonical final entry value
+      // Simplest non-canonical CBOR: wrap key 8 value 0 as `18 00`
+      final raw = valid.txBodyCbor;
+      expect(raw.last, equals(0x00)); // key 8 value is 0 (testnet tag)
+      builder.add(raw.sublist(0, raw.length - 1));
+      builder.add(const [0x18, 0x00]); // non-canonical zero!
+      final nonCanonicalCbor = builder.toBytes();
+
+      final tampered = CardanoSignRequestUr(
+        requestId: valid.requestId,
+        network: valid.network,
+        txBodyCbor: nonCanonicalCbor,
+        utxoInputs: valid.utxoInputs,
+        changeOutputs: valid.changeOutputs,
+        requireStakeWitness: false,
+      );
+      expect(decodedMap.getByIntKey(8), isNotNull);
+      expect(
+        () => Sec01Guard.audit(
+          request: tampered,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.malformedTxBody,
+          ),
+        ),
+      );
+    });
   });
 }

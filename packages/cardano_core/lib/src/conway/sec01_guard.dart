@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import '../bc_ur/cardano_ur_messages.dart';
-import '../crypto/blake2b.dart';
 import '../crypto/bytes.dart';
 import '../crypto/cardano_keys.dart';
 import 'models.dart';
@@ -88,15 +87,23 @@ class Sec01AuditReport {
 class Sec01Guard {
   static final BigInt defaultProtocolKeyDeposit = BigInt.from(2000000);
 
-  /// Audits [request] against [masterKey] and [expectedNetwork].
+  /// Audits [request] against [accountPublicKey] (or [masterKey]) and [expectedNetwork].
   /// Throws [Sec01SecurityException] on any tampering or anomaly.
   static Sec01AuditReport audit({
     required CardanoSignRequestUr request,
-    required CardanoMasterKey masterKey,
+    CardanoMasterKey? masterKey,
+    CardanoAccountPublicKey? accountPublicKey,
     required CardanoNetwork expectedNetwork,
     int accountIndex = 0,
     BigInt? fallbackKeyDeposit,
   }) {
+    if (accountPublicKey == null && masterKey == null) {
+      throw ArgumentError(
+        'Either accountPublicKey or masterKey must be provided to Sec01Guard.audit.',
+      );
+    }
+    final acctPub = accountPublicKey ??
+        masterKey!.exportAccountPublicKey(accountIndex: accountIndex);
     final keyDeposit = fallbackKeyDeposit ?? defaultProtocolKeyDeposit;
 
     // 1. Network Guard
@@ -114,6 +121,15 @@ class Sec01Guard {
       throw Sec01SecurityException(
         Sec01ErrorCode.malformedTxBody,
         'Failed to parse Conway TxBody CBOR: $e',
+      );
+    }
+
+    // Enforce canonical round-trip equality so non-canonical CBOR or unparsed fields are rejected
+    final canonicalCbor = ConwayTxSerializer.encodeTxBody(txBody);
+    if (!constantTimeEquals(canonicalCbor, request.txBodyCbor)) {
+      throw const Sec01SecurityException(
+        Sec01ErrorCode.malformedTxBody,
+        'TxBody CBOR is non-canonical or contains unparsed fields.',
       );
     }
 
@@ -171,36 +187,26 @@ class Sec01Guard {
           'Invalid input derivation role ${ctx.derivationRole} (expected 0 or 1)',
         );
       }
-      if (ctx.derivationIndex < 0) {
+      if (ctx.derivationIndex < 0 || ctx.derivationIndex >= 0x80000000) {
         throw Sec01SecurityException(
           Sec01ErrorCode.unauthorizedInputAddress,
-          'Negative input derivation index ${ctx.derivationIndex}',
+          'Invalid input derivation index ${ctx.derivationIndex} (expected 0 <= index < 2^31)',
         );
       }
 
       _assertAddressNetwork(ctx.addressBytes, expectedNetwork, 'input $id');
 
-      // Re-derive Base & Enterprise address for (role, index) to prove ownership
-      final expectedBase = masterKey.deriveBaseAddressBytes(
-        accountIndex: accountIndex,
+      // Re-derive Base & Enterprise address via public account key to prove ownership
+      final expectedBase = acctPub.deriveBaseAddressBytes(
         role: ctx.derivationRole,
         index: ctx.derivationIndex,
         network: expectedNetwork,
       );
-      final payKey = masterKey.deriveAddressSigningKey(
-        accountIndex: accountIndex,
+      final expectedEnterprise = acctPub.deriveEnterpriseAddressBytes(
         role: ctx.derivationRole,
         index: ctx.derivationIndex,
+        network: expectedNetwork,
       );
-      final Uint8List expectedEnterprise;
-      try {
-        expectedEnterprise = CardanoAddress.buildEnterpriseAddressBytes(
-          paymentKeyHash: blake2b224(payKey.publicKey),
-          network: expectedNetwork,
-        );
-      } finally {
-        payKey.dispose();
-      }
 
       if (!constantTimeEquals(ctx.addressBytes, expectedBase) &&
           !constantTimeEquals(ctx.addressBytes, expectedEnterprise)) {
@@ -230,10 +236,10 @@ class Sec01Guard {
           'Change output index ${chg.txOutputIndex} out of bounds (${txBody.outputs.length} outputs).',
         );
       }
-      if (chg.internalIndex < 0) {
+      if (chg.internalIndex < 0 || chg.internalIndex >= 0x80000000) {
         throw Sec01SecurityException(
           Sec01ErrorCode.invalidChangeIndex,
-          'Negative change internal derivation index ${chg.internalIndex}.',
+          'Change internalIndex must be in [0, 2^31 - 1]: ${chg.internalIndex}.',
         );
       }
       if (changeIndexMap.containsKey(chg.txOutputIndex)) {
@@ -244,8 +250,7 @@ class Sec01Guard {
       }
       changeIndexMap[chg.txOutputIndex] = chg.internalIndex;
 
-      final expectedChangeBytes = masterKey.deriveBaseAddressBytes(
-        accountIndex: accountIndex,
+      final expectedChangeBytes = acctPub.deriveBaseAddressBytes(
         role: 1,
         index: chg.internalIndex,
         network: expectedNetwork,
@@ -308,11 +313,8 @@ class Sec01Guard {
     }
 
     // 5. Stake Credential & Governance Guard (m/1852'/1815'/accountIndex'/2/0)
-    final expectedStakeHash = masterKey.deriveStakeKeyHash(
-      accountIndex: accountIndex,
-    );
-    final expectedRewardBytes = masterKey.deriveRewardAddressBytes(
-      accountIndex: accountIndex,
+    final expectedStakeHash = acctPub.deriveStakeKeyHash();
+    final expectedRewardBytes = acctPub.deriveRewardAddressBytes(
       network: expectedNetwork,
     );
 

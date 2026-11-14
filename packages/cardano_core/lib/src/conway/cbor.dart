@@ -429,6 +429,7 @@ class _CborReader {
         return CborArray(items);
       case 5:
         final entries = <CborMapEntry>[];
+        final seenKeys = <String>{};
         if (addInfo == 31) {
           while (true) {
             if (offset >= bytes.length) {
@@ -439,6 +440,10 @@ class _CborReader {
               break;
             }
             final k = readValue();
+            final kHex = hexEncode(k.encode());
+            if (!seenKeys.add(kHex)) {
+              throw const FormatException('Duplicate CBOR map key detected');
+            }
             final v = readValue();
             entries.add(CborMapEntry(k, v));
           }
@@ -447,6 +452,10 @@ class _CborReader {
         final count = _readArg(addInfo).toInt();
         for (var i = 0; i < count; i++) {
           final k = readValue();
+          final kHex = hexEncode(k.encode());
+          if (!seenKeys.add(kHex)) {
+            throw const FormatException('Duplicate CBOR map key detected');
+          }
           final v = readValue();
           entries.add(CborMapEntry(k, v));
         }

@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "buildNumber": 1,
+  "schemaVersion": 1,
+  "minCompatibleSchema": 1,
+  "releaseNotes": "Bản phát hành chính thức Cardano Air-Gapped Watch-Only Hot Wallet."
+}

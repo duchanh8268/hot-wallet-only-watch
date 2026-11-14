@@ -169,11 +169,53 @@ void main() {
         expect(root.items[0].encode(), equals(bodyBytes));
         expect(root.items[2], equals(const CborBool(true)));
         expect(root.items[3], equals(const CborNull()));
+
+        // Verified with expectedVKeyHashesHex
+        final expectedHash = hexEncode(blake2b224(payKey.publicKey));
+        final checkedBytes = ConwayTxSerializer.assembleSignedTransaction(
+          txBodyCbor: bodyBytes,
+          witnesses: [VKeyWitness(vkey: payKey.publicKey, signature: sig)],
+          expectedVKeyHashesHex: {expectedHash},
+        );
+        expect(checkedBytes, equals(signedTxBytes));
+
+        // Rejects unexpected/extra VKey hash
+        expect(
+          () => ConwayTxSerializer.assembleSignedTransaction(
+            txBodyCbor: bodyBytes,
+            witnesses: [VKeyWitness(vkey: payKey.publicKey, signature: sig)],
+            expectedVKeyHashesHex: {
+              hexEncode(Uint8List.fromList(List<int>.filled(28, 0xaa))),
+            },
+          ),
+          throwsStateError,
+        );
       } finally {
         payKey.dispose();
         master.dispose();
         zeroize(entropy);
       }
+    });
+
+    test('Rejects duplicate CBOR map keys and unsupported Conway TxBody keys', () {
+      // Duplicate key 1 in CBOR map: a2 01 0a 01 14
+      final dupCbor = Uint8List.fromList([0xa2, 0x01, 0x0a, 0x01, 0x14]);
+      expect(() => CborValue.decode(dupCbor), throwsFormatException);
+
+      // TxBody map containing hidden Conway key 22 (treasury_donation)
+      final maliciousMap = CborMap([
+        CborMapEntry(
+          CborInt.fromInt(0),
+          CborTag(258, const CborArray([])),
+        ),
+        CborMapEntry(CborInt.fromInt(1), const CborArray([])),
+        CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(170000)),
+        CborMapEntry(CborInt.fromInt(22), CborInt.fromInt(99999999)),
+      ]).encode();
+      expect(
+        () => ConwayTxSerializer.decodeTxBody(maliciousMap),
+        throwsFormatException,
+      );
     });
   });
 }
