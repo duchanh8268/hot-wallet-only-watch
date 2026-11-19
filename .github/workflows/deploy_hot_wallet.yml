@@ -36,6 +36,12 @@ jobs:
           dart analyze
           dart test
 
+      - name: Analyze chain_core_interface
+        working-directory: packages/chain_core_interface
+        run: |
+          dart pub get
+          dart analyze
+
       - name: Analyze, test, and build hot_wallet_web
         working-directory: apps/hot_wallet_web
         run: |
