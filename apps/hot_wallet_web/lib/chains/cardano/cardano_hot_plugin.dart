@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 import 'package:cardano_core/cardano_core.dart';
 import 'package:chain_core_interface/chain_core_interface.dart';
-import 'services/blockfrost_service.dart';
 
 /// Cardano Conway Era Hot Wallet plugin implementing [IHotChainPlugin].
 class CardanoHotPlugin implements IHotChainPlugin {
