@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:cardano_core/cardano_core.dart';
+import 'package:chain_core_interface/chain_core_interface.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/services/hot_chain_registry.dart';
 import '../l10n/app_strings.dart';
 import 'blockfrost_service.dart';
 import 'conway_tx_builder.dart';
@@ -23,6 +25,8 @@ class HotAppState extends ChangeNotifier {
   final UpdateCheckService updateService;
   final SchemaMigrationRunner migrationRunner = SchemaMigrationRunner();
   late final HdWalletSyncService syncService;
+  final HotChainRegistry chainRegistry = HotChainRegistry();
+  ChainId _activeChainId = ChainId.cardano;
 
   CardanoNetwork _network = CardanoNetwork.preprod; // Default: Preprod
   HotLocale _locale = HotLocale.vi; // Default: Vietnamese
@@ -61,6 +65,8 @@ class HotAppState extends ChangeNotifier {
   }
 
   CardanoNetwork get network => _network;
+  ChainId get activeChainId => _activeChainId;
+  IHotChainPlugin get activeChainPlugin => chainRegistry.getPlugin(_activeChainId);
   HotLocale get locale => _locale;
   HotStrings get strings => HotStrings(_locale);
   int get gapLimit => _gapLimit;
@@ -230,6 +236,12 @@ class HotAppState extends ChangeNotifier {
   Future<void> setCustomTokenDecimals(String unit, int decimals) async {
     _customTokenDecimals[unit] = decimals.clamp(0, 18);
     await _persist();
+    notifyListeners();
+  }
+
+  void setActiveChain(ChainId next) {
+    if (_activeChainId == next) return;
+    _activeChainId = next;
     notifyListeners();
   }
 

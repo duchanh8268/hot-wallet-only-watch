@@ -10,6 +10,11 @@ apps/*
 !packages/
 packages/*
 !packages/cardano_core/
+!packages/chain_core_interface/
+!packages/bitcoin_core/
+!packages/evm_core/
+!packages/solana_core/
+!packages/sui_core/
 
 # Dart / Flutter build & tooling artifacts
 **/.dart_tool/

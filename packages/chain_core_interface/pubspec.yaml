@@ -1,0 +1,14 @@
+name: chain_core_interface
+description: Pure Dart abstract plugin interfaces, common data models, and Air-Gap BC-UR definitions for multi-chain cold/hot wallets.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  typed_data: ^1.4.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0

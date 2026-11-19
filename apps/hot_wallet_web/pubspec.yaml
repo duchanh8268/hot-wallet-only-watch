@@ -13,6 +13,8 @@ dependencies:
     sdk: flutter
   cardano_core:
     path: ../../packages/cardano_core
+  chain_core_interface:
+    path: ../../packages/chain_core_interface
   http: ^1.2.2
   qr_flutter: ^4.1.0
   web: ^1.1.0
