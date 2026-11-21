@@ -124,10 +124,9 @@ void main() {
       final state = HotAppState(storage: storage);
       await state.init();
 
-      // Ensure data was completely loaded and not wiped
+      // Ensure data was completely loaded and not wiped (legacy projectIds ignored cleanly)
       expect(state.network, equals(CardanoNetwork.preprod));
       expect(state.gapLimit, equals(25));
-      expect(state.projectIdFor(CardanoNetwork.preprod), equals('preprod_secret_key_123'));
       expect(state.allProfiles.length, equals(1));
       expect(state.allProfiles.first.name, equals('Primary Vault'));
 
@@ -312,6 +311,22 @@ void main() {
       // Shows status message indicating it is already the latest version
       expect(find.byKey(const Key('update_status_msg')), findsOneWidget);
       expect(find.text(state.strings.alreadyLatestVersion), findsOneWidget);
+
+      // Verifies Cardano Koios RPC defaults are shown and Blockfrost Project ID inputs are removed
+      expect(find.text('Cardano (Koios REST RPC)'), findsOneWidget);
+      expect(
+        find.text('https://cardano-koios-rpc.duchanh8268.workers.dev/preprod'),
+        findsWidgets,
+      );
+      expect(
+        find.text('https://cardano-koios-rpc.duchanh8268.workers.dev/preview'),
+        findsWidgets,
+      );
+      expect(
+        find.text('https://cardano-koios-rpc.duchanh8268.workers.dev/mainnet'),
+        findsWidgets,
+      );
+      expect(find.textContaining('Blockfrost Project ID'), findsNothing);
     });
   });
 }

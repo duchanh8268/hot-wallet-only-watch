@@ -17,7 +17,7 @@ import '../chains/sui/models/sui_profile.dart';
 import '../core/models/chain_tx_record.dart';
 import '../core/services/hot_chain_registry.dart';
 import '../l10n/app_strings.dart';
-import 'blockfrost_service.dart';
+import 'cardano_rpc_service.dart';
 import 'conway_tx_builder.dart';
 import 'hd_wallet_sync_service.dart';
 import 'update_service.dart';
@@ -32,7 +32,7 @@ class HotAppState extends ChangeNotifier {
   static const String _backupStorageKey = 'hot_wallet_config_backup';
 
   final WebCryptoStorage storage;
-  final BlockfrostService blockfrost;
+  final CardanoRpcService cardanoRpc;
   final UpdateCheckService updateService;
   final SchemaMigrationRunner migrationRunner = SchemaMigrationRunner();
   late final HdWalletSyncService syncService;
@@ -42,12 +42,6 @@ class HotAppState extends ChangeNotifier {
   CardanoNetwork _network = CardanoNetwork.preprod; // Default: Preprod
   HotLocale _locale = HotLocale.vi; // Default: Vietnamese
   int _gapLimit = 20;
-
-  final Map<CardanoNetwork, String> _projectIds = {
-    CardanoNetwork.preprod: '',
-    CardanoNetwork.preview: '',
-    CardanoNetwork.mainnet: '',
-  };
 
   final Map<ChainId, ChainNetwork> _chainNetworks = {};
   final Map<String, String> _customRpcEndpoints = {};
@@ -96,12 +90,12 @@ class HotAppState extends ChangeNotifier {
 
   HotAppState({
     WebCryptoStorage? storage,
-    BlockfrostService? blockfrost,
+    CardanoRpcService? cardanoRpc,
     UpdateCheckService? updateService,
   })  : storage = storage ?? WebCryptoStorage(),
-        blockfrost = blockfrost ?? BlockfrostService(),
+        cardanoRpc = cardanoRpc ?? CardanoRpcService(),
         updateService = updateService ?? UpdateCheckService() {
-    syncService = HdWalletSyncService(this.blockfrost);
+    syncService = HdWalletSyncService(this.cardanoRpc);
     _chainNetworks[ChainId.cardano] = CardanoHotPlugin.instance.defaultNetwork;
     _chainNetworks[ChainId.bitcoin] = BitcoinHotPlugin.instance.defaultNetwork;
     _chainNetworks[ChainId.ethereum] = EvmHotPlugin.ethereum.defaultNetwork;
@@ -139,9 +133,6 @@ class HotAppState extends ChangeNotifier {
     _lastBuiltTx = tx;
     notifyListeners();
   }
-
-  String projectIdFor(CardanoNetwork net) => _projectIds[net] ?? '';
-  String get activeProjectId => projectIdFor(_network);
 
   List<WatchOnlyProfile> get allProfiles => List.unmodifiable(_profiles);
   List<WatchOnlyProfile> get networkProfiles =>
@@ -284,11 +275,6 @@ class HotAppState extends ChangeNotifier {
         if (loc == 'en') _locale = HotLocale.en;
         _gapLimit = (json['gapLimit'] as num?)?.toInt() ?? 20;
 
-        final apiMap = json['projectIds'] as Map<String, dynamic>? ?? {};
-        for (final net in CardanoNetwork.values) {
-          _projectIds[net] = (apiMap[net.id] as String?) ?? '';
-        }
-
         final profList = json['profiles'] as List<dynamic>? ?? [];
         _profiles
           ..clear()
@@ -345,7 +331,6 @@ class HotAppState extends ChangeNotifier {
       'selectedNetwork': _network.id,
       'locale': _locale.name,
       'gapLimit': _gapLimit,
-      'projectIds': {for (final n in CardanoNetwork.values) n.id: _projectIds[n] ?? ''},
       'profiles': [for (final p in _profiles) p.toJson()],
       'activeProfileId': _activeProfileId,
       'customTokenDecimals': _customTokenDecimals,
@@ -401,7 +386,7 @@ class HotAppState extends ChangeNotifier {
     _persist();
     notifyListeners();
     if (_activeChainId == ChainId.cardano) {
-      if (activeProfile != null && activeProjectId.isNotEmpty) {
+      if (activeProfile != null) {
         syncActiveWallet();
       }
     } else if (_activeChainId == ChainId.bitcoin) {
@@ -427,11 +412,14 @@ class HotAppState extends ChangeNotifier {
     _chainNetworks[_activeChainId] = network;
     if (_activeChainId == ChainId.cardano) {
       _network = CardanoNetwork.fromId(network.id);
+      final p = activeProfile;
+      _syncState = p == null ? null : _syncCache['${p.id}:${_network.id}'];
+      _syncError = null;
     }
     _persist();
     notifyListeners();
     if (_activeChainId == ChainId.cardano) {
-      if (activeProfile != null && activeProjectId.isNotEmpty) {
+      if (activeProfile != null) {
         syncActiveWallet();
       }
     } else if (_activeChainId == ChainId.bitcoin) {
@@ -1028,7 +1016,7 @@ class HotAppState extends ChangeNotifier {
     _syncError = null;
     await _persist();
     notifyListeners();
-    if (p != null && activeProjectId.trim().isNotEmpty) {
+    if (p != null) {
       await syncActiveWallet();
     }
   }
@@ -1049,13 +1037,9 @@ class HotAppState extends ChangeNotifier {
   }
 
   Future<void> saveSettings({
-    required Map<CardanoNetwork, String> projectIds,
     required int gapLimit,
     Map<String, String>? customRpcEndpoints,
   }) async {
-    for (final e in projectIds.entries) {
-      _projectIds[e.key] = e.value.trim();
-    }
     _gapLimit = gapLimit.clamp(5, 100);
     if (customRpcEndpoints != null) {
       final validated = <String, String>{};
@@ -1096,6 +1080,10 @@ class HotAppState extends ChangeNotifier {
   }
 
   void _applyCustomEndpoints() {
+    cardanoRpc
+      ..resetToDefaultRpcUrl('preprod')
+      ..resetToDefaultRpcUrl('preview')
+      ..resetToDefaultRpcUrl('mainnet');
     EvmHotPlugin.ethereum.rpcService
       ..resetToDefaultRpcUrl('mainnet')
       ..resetToDefaultRpcUrl('sepolia')
@@ -1113,7 +1101,10 @@ class HotAppState extends ChangeNotifier {
       } catch (_) {
         continue;
       }
-      if (key.startsWith('btc_')) {
+      if (key.startsWith('cardano_')) {
+        final net = key.replaceFirst('cardano_', '');
+        cardanoRpc.setCustomRpcUrl(net, url);
+      } else if (key.startsWith('btc_')) {
         final net = key.replaceFirst('btc_', '');
         BitcoinHotPlugin.instance.mempoolService.setCustomApiUrl(net, url);
       } else if (key.startsWith('eth_')) {
@@ -1137,7 +1128,11 @@ class HotAppState extends ChangeNotifier {
     if (ep.isEmpty) throw Exception('Endpoint URL / Key không được để trống');
     validateCustomRpcUrl(ep);
     final chain = chainKey.toLowerCase();
-    if (chain == 'btc') {
+    if (chain == 'cardano') {
+      cardanoRpc.setCustomRpcUrl(netId, ep);
+      final slot = await cardanoRpc.getLatestSlot(CardanoNetwork.fromId(netId));
+      return 'OK • Latest slot: $slot';
+    } else if (chain == 'btc') {
       BitcoinHotPlugin.instance.mempoolService.setCustomApiUrl(netId, ep);
       final rates = await BitcoinHotPlugin.instance.mempoolService.getRecommendedFees(netId);
       return 'OK • Phí đề xuất: ${rates.fastestFee} sat/vB';
@@ -1159,13 +1154,6 @@ class HotAppState extends ChangeNotifier {
     throw Exception('Chuỗi không hỗ trợ: $chainKey');
   }
 
-  Future<int> testBlockfrostConnection(
-    CardanoNetwork net,
-    String projectId,
-  ) {
-    return blockfrost.getLatestSlot(net, projectId);
-  }
-
   Future<WatchOnlyProfile> addProfile({
     required String name,
     required CardanoAccountUr accountUr,
@@ -1185,7 +1173,7 @@ class HotAppState extends ChangeNotifier {
     _syncState = null;
     await _persist();
     notifyListeners();
-    if (profile.network == _network && activeProjectId.isNotEmpty) {
+    if (profile.network == _network) {
       await syncActiveWallet();
     }
     return profile;
@@ -1218,20 +1206,12 @@ class HotAppState extends ChangeNotifier {
     _syncError = null;
     await _persist();
     notifyListeners();
-    if (activeProjectId.isNotEmpty) {
-      await syncActiveWallet();
-    }
+    await syncActiveWallet();
   }
 
   Future<void> syncActiveWallet() async {
     final profile = activeProfile;
     if (profile == null) return;
-    final key = projectIdFor(profile.network);
-    if (key.trim().isEmpty) {
-      _syncError = strings.missingApiKey;
-      notifyListeners();
-      return;
-    }
 
     final mySeq = ++_syncSeq;
     _syncing = true;
@@ -1241,7 +1221,6 @@ class HotAppState extends ChangeNotifier {
     try {
       final result = await syncService.syncProfile(
         profile: profile,
-        projectId: key,
         gapLimit: _gapLimit,
       );
       if (mySeq == _syncSeq) {
@@ -1295,7 +1274,7 @@ class HotAppState extends ChangeNotifier {
       totalMultiAsset: totalAssets,
       utxos: [
         DerivedUtxo(
-          utxo: BlockfrostUtxo(
+          utxo: CardanoUtxo(
             txHash: '1111111111111111111111111111111111111111111111111111111111111111',
             outputIndex: 0,
             address: extAddr0,
@@ -1306,7 +1285,7 @@ class HotAppState extends ChangeNotifier {
           derivationIndex: 0,
         ),
         DerivedUtxo(
-          utxo: BlockfrostUtxo(
+          utxo: CardanoUtxo(
             txHash: '2222222222222222222222222222222222222222222222222222222222222222',
             outputIndex: 1,
             address: extAddr1,
@@ -1317,7 +1296,7 @@ class HotAppState extends ChangeNotifier {
           derivationIndex: 1,
         ),
         DerivedUtxo(
-          utxo: BlockfrostUtxo(
+          utxo: CardanoUtxo(
             txHash: '3333333333333333333333333333333333333333333333333333333333333333',
             outputIndex: 0,
             address: extAddr1,

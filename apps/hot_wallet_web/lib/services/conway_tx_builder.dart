@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cardano_core/cardano_core.dart';
 
-import 'blockfrost_service.dart';
+import 'cardano_rpc_service.dart';
 import 'hd_wallet_sync_service.dart';
 
 class TxBuildResult {

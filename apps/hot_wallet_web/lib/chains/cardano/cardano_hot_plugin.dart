@@ -80,7 +80,7 @@ class CardanoHotPlugin implements IHotChainPlugin {
 
   @override
   Future<void> configureEndpoint({required ChainNetwork network, String? customUrl, String? apiKey}) async {
-    // Cardano endpoint & project ID configuration is managed via BlockfrostService / WebCryptoStorage
+    // Cardano Koios RPC endpoint configuration is managed via CardanoRpcService / WebCryptoStorage
   }
 
   @override
@@ -88,7 +88,7 @@ class CardanoHotPlugin implements IHotChainPlugin {
     required ChainNetwork network,
     required String address,
   }) async {
-    // Standard query delegated to BlockfrostService
+    // Standard query delegated to CardanoRpcService
     return {
       'address': address,
       'network': network.id,
@@ -100,6 +100,6 @@ class CardanoHotPlugin implements IHotChainPlugin {
     required ChainNetwork network,
     required Uint8List signedTxBytes,
   }) async {
-    throw UnimplementedError('Direct broadcast should use BlockfrostService.submitTransaction');
+    throw UnimplementedError('Direct broadcast should use CardanoRpcService.submitTransaction');
   }
 }

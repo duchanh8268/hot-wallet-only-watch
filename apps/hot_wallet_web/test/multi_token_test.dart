@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hot_wallet_web/main.dart';
 import 'package:hot_wallet_web/screens/dashboard_screen.dart';
 import 'package:hot_wallet_web/screens/send_tx_screen.dart';
-import 'package:hot_wallet_web/services/blockfrost_service.dart';
+import 'package:hot_wallet_web/services/cardano_rpc_service.dart';
 import 'package:hot_wallet_web/services/conway_tx_builder.dart';
 import 'package:hot_wallet_web/services/hd_wallet_sync_service.dart';
 import 'package:hot_wallet_web/services/hot_app_state.dart';
@@ -68,27 +68,33 @@ void main() {
       expect(() => parseTokenAmount('1.1234567', 6), throwsFormatException);
     });
 
-    test('parses decimals from onchain_metadata when registry metadata is null', () async {
+    test('parses decimals from cip68_metadata when token_registry_metadata is null', () async {
+      final policyHex = 'c16c2dc8${'00' * 24}';
+      final nameHex = '9fed72';
       final client = MockClient((req) async {
         return http.Response(
-          jsonEncode({
-            'fingerprint': 'asset1mwmj9cp99pa9wg4evkucsrj6uk0vdkeektksl',
-            'metadata': null,
-            'onchain_metadata': {
-              'name': 'MIN',
-              'ticker': 'MIN',
-              'decimals': '6',
+          jsonEncode([
+            {
+              'policy_id': policyHex,
+              'asset_name': nameHex,
+              'fingerprint': 'asset1mwmj9cp99pa9wg4evkucsrj6uk0vdkeektksl',
+              'token_registry_metadata': null,
+              'cip68_metadata': {
+                '333': {
+                  'name': 'MIN',
+                  'ticker': 'MIN',
+                  'decimals': '6',
+                },
+              },
             },
-            'onchain_metadata_standard': 'CIP68v1',
-          }),
+          ]),
           200,
         );
       });
-      final bf = BlockfrostService(client: client);
-      final meta = await bf.getAssetMetadata(
+      final rpc = CardanoRpcService(client: client);
+      final meta = await rpc.getAssetMetadata(
         CardanoNetwork.preprod,
-        'key',
-        'c16c2dc80000000000000000000000000000000000000000000000009fed72',
+        '$policyHex$nameHex',
       );
       expect(meta, isNotNull);
       expect(meta!.decimals, 6);
@@ -122,42 +128,53 @@ void main() {
 
       final client = MockClient((req) async {
         final path = req.url.path;
-        if (path.endsWith('/blocks/latest')) {
-          return http.Response(jsonEncode({'slot': 90000000}), 200);
+        if (path.endsWith('/tip')) {
+          return http.Response(jsonEncode([{'abs_slot': 90000000}]), 200);
         }
-        if (path.endsWith('/epochs/latest/parameters')) {
+        if (path.endsWith('/cli_protocol_params')) {
           return http.Response(
             jsonEncode({
-              'min_fee_a': 44,
-              'min_fee_b': 155381,
-              'coins_per_utxo_size': '4310',
-              'key_deposit': '2000000',
-              'pool_deposit': '500000000',
-              'max_tx_size': 16384,
+              'txFeePerByte': 44,
+              'txFeeFixed': 155381,
+              'utxoCostPerByte': 4310,
+              'stakeAddressDeposit': 2000000,
+              'stakePoolDeposit': 500000000,
+              'maxTxSize': 16384,
             }),
             200,
           );
         }
-        if (path.endsWith('/addresses/$addr0/transactions')) {
-          return http.Response(
-            jsonEncode([
-              {'tx_hash': hexEncode(List<int>.filled(32, 0x11)), 'block_height': 1, 'block_time': 1},
-            ]),
-            200,
-          );
-        }
-        if (path.endsWith('/addresses/$addr0/utxos')) {
-          final page = int.tryParse(req.url.queryParameters['page'] ?? '1') ?? 1;
-          if (page == 1) {
+        if (path.endsWith('/address_txs')) {
+          final body = jsonDecode(req.body) as Map<String, dynamic>;
+          final addrs = (body['_addresses'] as List<dynamic>).cast<String>();
+          if (addrs.contains(addr0)) {
             return http.Response(
               jsonEncode([
-                for (var i = 0; i < 100; i++)
+                {'tx_hash': hexEncode(List<int>.filled(32, 0x11)), 'block_height': 1, 'block_time': 1},
+              ]),
+              200,
+            );
+          }
+          return http.Response(jsonEncode([]), 200);
+        }
+        if (path.endsWith('/address_utxos')) {
+          final offset = int.tryParse(req.url.queryParameters['offset'] ?? '0') ?? 0;
+          if (offset == 0) {
+            return http.Response(
+              jsonEncode([
+                for (var i = 0; i < 1000; i++)
                   {
                     'tx_hash': hexEncode(List<int>.filled(32, i % 250)),
-                    'output_index': i,
-                    'amount': [
-                      {'unit': 'lovelace', 'quantity': '2000000'},
-                      if (i < 6) {'unit': assets[i].unit, 'quantity': '100'},
+                    'tx_index': i,
+                    'address': addr0,
+                    'value': '2000000',
+                    'asset_list': [
+                      if (i < 6)
+                        {
+                          'policy_id': assets[i].policyIdHex,
+                          'asset_name': assets[i].assetNameHex,
+                          'quantity': '100',
+                        },
                     ],
                   },
               ]),
@@ -168,44 +185,33 @@ void main() {
             jsonEncode([
               {
                 'tx_hash': hexEncode(List<int>.filled(32, 0xfe)),
-                'output_index': 0,
-                'amount': [
-                  {'unit': 'lovelace', 'quantity': '3000000'},
-                  {'unit': assets[6].unit, 'quantity': '50'},
+                'tx_index': 0,
+                'address': addr0,
+                'value': '3000000',
+                'asset_list': [
+                  {
+                    'policy_id': assets[6].policyIdHex,
+                    'asset_name': assets[6].assetNameHex,
+                    'quantity': '50',
+                  },
                 ],
               },
             ]),
             200,
           );
         }
-        if (path.contains('/addresses/') && path.endsWith('/transactions')) {
+        if (path.endsWith('/account_info')) {
           return http.Response(jsonEncode([]), 200);
         }
-        if (path.contains('/addresses/') && path.endsWith('/utxos')) {
-          return http.Response(jsonEncode([]), 200);
-        }
-        if (path.endsWith('/accounts/$stakeAddr')) {
-          return http.Response('Not found', 404);
-        }
-        if (path.endsWith('/assets/${assets[3].unit}')) {
-          // Simulate failure on one metadata request
+        if (path.endsWith('/asset_info')) {
+          // Simulate failure on metadata batch without aborting sync
           return http.Response('Server Error', 500);
-        }
-        if (path.contains('/assets/')) {
-          final unit = path.split('/').last;
-          return http.Response(
-            jsonEncode({
-              'fingerprint': 'asset1test$unit'.substring(0, 20),
-              'metadata': {'name': 'Token $unit', 'ticker': 'TK', 'decimals': 2},
-            }),
-            200,
-          );
         }
         return http.Response('Not found', 404);
       });
 
-      final bf = BlockfrostService(client: client);
-      final syncSvc = HdWalletSyncService(bf);
+      final rpc = CardanoRpcService(client: client);
+      final syncSvc = HdWalletSyncService(rpc);
       final profile = WatchOnlyProfile(
         id: 'p_paginated',
         name: 'Paginated',
@@ -216,16 +222,14 @@ void main() {
 
       final syncState = await syncSvc.syncProfile(
         profile: profile,
-        projectId: 'key',
         gapLimit: 3,
       );
 
-      expect(syncState.utxos.length, 101);
+      expect(syncState.utxos.length, 1001);
       expect(syncState.totalMultiAsset.assets.length, 7);
       expect(syncState.totalMultiAsset[assets[6]], BigInt.from(50));
-      // Failed metadata on assets[3] did not abort sync or drop assets[3]
-      expect(syncState.assetMetadata.containsKey(assets[3].unit), isFalse);
-      expect(syncState.assetMetadata.containsKey(assets[0].unit), isTrue);
+      // Failed metadata batch did not abort sync or drop assets
+      expect(syncState.assetMetadata, isEmpty);
     });
 
     test('builds multi-token tx with autoMinAda, exact fee convergence, and passes SEC-01', () {
@@ -247,7 +251,7 @@ void main() {
 
       final utxos = [
         DerivedUtxo(
-          utxo: BlockfrostUtxo(
+          utxo: CardanoUtxo(
             txHash: hexEncode(List<int>.filled(32, 0x01)),
             outputIndex: 0,
             address: addr0,
@@ -258,7 +262,7 @@ void main() {
           derivationIndex: 0,
         ),
         DerivedUtxo(
-          utxo: BlockfrostUtxo(
+          utxo: CardanoUtxo(
             txHash: hexEncode(List<int>.filled(32, 0x02)),
             outputIndex: 1,
             address: addr1,
@@ -344,7 +348,7 @@ void main() {
         totalMultiAsset: MultiAsset({k1: BigInt.from(500)}),
         utxos: [
           DerivedUtxo(
-            utxo: BlockfrostUtxo(
+            utxo: CardanoUtxo(
               txHash: hexEncode(List<int>.filled(32, 0x01)),
               outputIndex: 0,
               address: addr0,
@@ -355,7 +359,7 @@ void main() {
             derivationIndex: 0,
           ),
           DerivedUtxo(
-            utxo: BlockfrostUtxo(
+            utxo: CardanoUtxo(
               txHash: hexEncode(List<int>.filled(32, 0x02)),
               outputIndex: 0,
               address: addr1,

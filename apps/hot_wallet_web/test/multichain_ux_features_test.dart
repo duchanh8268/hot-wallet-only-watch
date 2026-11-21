@@ -10,7 +10,7 @@ import 'package:hot_wallet_web/chains/solana/services/solana_rpc_service.dart';
 import 'package:hot_wallet_web/chains/sui/services/sui_rpc_service.dart';
 import 'package:hot_wallet_web/core/models/chain_tx_record.dart';
 import 'package:hot_wallet_web/main.dart';
-import 'package:hot_wallet_web/services/blockfrost_service.dart';
+import 'package:hot_wallet_web/services/cardano_rpc_service.dart';
 import 'package:hot_wallet_web/services/hot_app_state.dart';
 import 'package:hot_wallet_web/services/web_crypto_storage.dart';
 import 'package:hot_wallet_web/widgets/recent_txs_section.dart';
@@ -24,8 +24,8 @@ void main() {
       final storage = WebCryptoStorage();
       final appState = HotAppState(
         storage: storage,
-        blockfrost: BlockfrostService(
-          client: MockClient((_) async => http.Response('{}', 200)),
+        cardanoRpc: CardanoRpcService(
+          client: MockClient((_) async => http.Response('[]', 200)),
         ),
       );
       await appState.init();
@@ -276,8 +276,8 @@ void main() {
       final storage = WebCryptoStorage();
       final appState = HotAppState(
         storage: storage,
-        blockfrost: BlockfrostService(
-          client: MockClient((_) async => http.Response('{}', 200)),
+        cardanoRpc: CardanoRpcService(
+          client: MockClient((_) async => http.Response('[]', 200)),
         ),
       );
 

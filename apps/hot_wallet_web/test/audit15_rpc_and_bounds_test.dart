@@ -8,7 +8,7 @@ import 'package:hot_wallet_web/chains/bitcoin/services/mempool_service.dart';
 import 'package:hot_wallet_web/chains/solana/services/solana_rpc_service.dart';
 import 'package:hot_wallet_web/chains/sui/services/sui_rpc_service.dart';
 import 'package:hot_wallet_web/chains/sui/sui_hot_plugin.dart';
-import 'package:hot_wallet_web/services/blockfrost_service.dart';
+import 'package:hot_wallet_web/services/cardano_rpc_service.dart';
 import 'package:hot_wallet_web/services/conway_tx_builder.dart';
 import 'package:hot_wallet_web/services/hd_wallet_sync_service.dart';
 import 'package:hot_wallet_web/services/hot_app_state.dart';
@@ -17,8 +17,8 @@ import 'package:http/testing.dart';
 
 void main() {
   group('AUDIT-15: Fee/UTXO Bounds & Fail-Closed RPC Services', () {
-    test('ProtocolParameters.fromBlockfrostJson clamps malicious out-of-range values', () {
-      final pparams = ProtocolParameters.fromBlockfrostJson({
+    test('ProtocolParameters.fromKoiosJson clamps malicious out-of-range values', () {
+      final pparams = ProtocolParameters.fromKoiosJson({
         'min_fee_a': 999999999,
         'min_fee_b': -500,
         'coins_per_utxo_size': 999999999,
@@ -61,7 +61,7 @@ void main() {
           totalMultiAsset: MultiAsset.empty,
           utxos: [
             DerivedUtxo(
-              utxo: BlockfrostUtxo(
+              utxo: CardanoUtxo(
                 txHash: 'a' * 64,
                 outputIndex: 0,
                 address: recvAddr,
@@ -118,7 +118,7 @@ void main() {
           totalMultiAsset: MultiAsset.empty,
           utxos: [
             DerivedUtxo(
-              utxo: BlockfrostUtxo(
+              utxo: CardanoUtxo(
                 txHash: 'b' * 64,
                 outputIndex: 0,
                 address: recvAddr,

@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:cardano_core/cardano_core.dart';
 
-import '../services/blockfrost_service.dart';
+import '../services/cardano_rpc_service.dart';
 
 /// Inserts `,` thousand separators into an unsigned integer digit string.
 String _groupThousands(String digits) {

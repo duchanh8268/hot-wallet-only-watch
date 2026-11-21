@@ -1,8 +1,8 @@
-import 'package:cardano_core/cardano_core.dart';
 import 'package:flutter/material.dart';
 
 import '../chains/evm/services/evm_rpc_service.dart';
 import '../chains/solana/services/solana_rpc_service.dart';
+import '../services/cardano_rpc_service.dart';
 import '../services/hot_app_state.dart';
 import '../theme/hot_theme.dart';
 
@@ -16,7 +16,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final Map<CardanoNetwork, TextEditingController> _controllers;
   late final Map<String, TextEditingController> _rpcControllers;
   final Map<String, String?> _testStatuses = {};
   final Map<String, bool> _testing = {};
@@ -24,6 +23,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _saving = false;
 
   static const Map<String, String> _defaultEndpoints = {
+    'cardano_preprod': CardanoRpcService.defaultPreprodRpcUrl,
+    'cardano_preview': CardanoRpcService.defaultPreviewRpcUrl,
+    'cardano_mainnet': CardanoRpcService.defaultMainnetRpcUrl,
     'btc_testnet4': 'https://mempool.space/testnet4/api',
     'btc_mainnet': 'https://mempool.space/api',
     'eth_sepolia': EvmRpcService.defaultSepoliaRpcUrl,
@@ -39,10 +41,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     widget.appState.addListener(_onAppStateChanged);
-    _controllers = {
-      for (final net in CardanoNetwork.values)
-        net: TextEditingController(text: widget.appState.projectIdFor(net)),
-    };
     _rpcControllers = {
       for (final e in _defaultEndpoints.entries)
         e.key: TextEditingController(
@@ -59,37 +57,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     widget.appState.removeListener(_onAppStateChanged);
-    for (final c in _controllers.values) {
-      c.dispose();
-    }
     for (final c in _rpcControllers.values) {
       c.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _testConnection(CardanoNetwork net) async {
-    final key = _controllers[net]!.text.trim();
-    if (key.isEmpty) {
-      setState(() => _testStatuses[net.id] = 'Error: Empty Project ID');
-      return;
-    }
-    setState(() {
-      _testing[net.id] = true;
-      _testStatuses[net.id] = null;
-    });
-    try {
-      final slot = await widget.appState.testBlockfrostConnection(net, key);
-      if (mounted) {
-        setState(() => _testStatuses[net.id] = 'OK • Latest slot: $slot');
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _testStatuses[net.id] = 'Failed: $e');
-      }
-    } finally {
-      if (mounted) setState(() => _testing[net.id] = false);
-    }
   }
 
   Future<void> _testMultiChainEndpoint(String chainKey, String netId, String rpcKey) async {
@@ -116,9 +87,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _saving = true);
     try {
       await widget.appState.saveSettings(
-        projectIds: {
-          for (final e in _controllers.entries) e.key: e.value.text.trim(),
-        },
         gapLimit: _gapLimit,
         customRpcEndpoints: {
           for (final e in _rpcControllers.entries)
@@ -236,99 +204,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(height: 16),
 
-        // 1. CARDANO BLOCKFROST SECTION
-        for (final net in [CardanoNetwork.preprod, CardanoNetwork.preview, CardanoNetwork.mainnet]) ...[
-          Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        net.id.toUpperCase(),
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          net.blockfrostBaseUrl,
-                          style: const TextStyle(fontSize: 11, color: Colors.white60, fontFamily: 'monospace'),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _controllers[net],
-                          obscureText: true,
-                          style: const TextStyle(fontSize: 12),
-                          decoration: InputDecoration(
-                            labelText: s.projectIdLabel(net.id.toUpperCase()),
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        height: 36,
-                        child: OutlinedButton(
-                          onPressed: _testing[net.id] == true ? null : () => _testConnection(net),
-                          child: Text(
-                            _testing[net.id] == true ? '...' : s.testConnectionBtn,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (_testStatuses[net.id] != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      _testStatuses[net.id]!,
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: _testStatuses[net.id]!.startsWith('OK')
-                            ? HotTheme.success
-                            : HotTheme.danger,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-
-        const SizedBox(height: 10),
-
-        // 2. MULTI-CHAIN RPC ACCORDION (Bitcoin, EVM, Solana, Sui)
+        // MULTI-CHAIN RPC ACCORDION (Cardano, Bitcoin, EVM, Solana, Sui)
         Card(
           margin: const EdgeInsets.only(bottom: 8),
           child: Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              initiallyExpanded: false,
+              initiallyExpanded: true,
               tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               leading: const Icon(Icons.hub, color: HotTheme.primary),
               title: Text(
-                isVi ? 'Cấu hình RPC Đa Chuỗi (BTC, EVM, SOL, SUI)' : 'Multi-Chain RPC (BTC, EVM, SOL, SUI)',
+                isVi ? 'Cấu hình RPC Đa Chuỗi (ADA, BTC, EVM, SOL, SUI)' : 'Multi-Chain RPC (ADA, BTC, EVM, SOL, SUI)',
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               ),
               subtitle: Text(
-                isVi ? 'Tùy chỉnh Mempool API, EVM RPC, Solana & Sui' : 'Custom RPC & API Endpoints',
+                isVi
+                    ? 'Tự động kết nối không cần API key • Có thể tùy chỉnh URL RPC riêng'
+                    : 'Zero-key default endpoints • Custom RPC overrides supported',
                 style: const TextStyle(fontSize: 11, color: HotTheme.textSecondary),
               ),
               childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               children: [
+                const Divider(),
+                // Cardano
+                const Text('Cardano (Koios REST RPC)', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0033AD))),
+                const SizedBox(height: 6),
+                _buildEndpointRow(
+                  label: 'Cardano Preprod RPC',
+                  rpcKey: 'cardano_preprod',
+                  chainKey: 'cardano',
+                  netId: 'preprod',
+                  hint: _defaultEndpoints['cardano_preprod']!,
+                ),
+                _buildEndpointRow(
+                  label: 'Cardano Preview RPC',
+                  rpcKey: 'cardano_preview',
+                  chainKey: 'cardano',
+                  netId: 'preview',
+                  hint: _defaultEndpoints['cardano_preview']!,
+                ),
+                _buildEndpointRow(
+                  label: 'Cardano Mainnet RPC',
+                  rpcKey: 'cardano_mainnet',
+                  chainKey: 'cardano',
+                  netId: 'mainnet',
+                  hint: _defaultEndpoints['cardano_mainnet']!,
+                ),
+
                 const Divider(),
                 // Bitcoin
                 const Text('Bitcoin (Mempool.space API)', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFF7931A))),

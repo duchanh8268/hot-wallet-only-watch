@@ -1,5 +1,5 @@
 import 'package:cardano_core/cardano_core.dart';
-import 'blockfrost_service.dart';
+import 'cardano_rpc_service.dart';
 
 class WatchOnlyProfile {
   final String id;
@@ -49,7 +49,7 @@ class WatchOnlyProfile {
 }
 
 class DerivedUtxo {
-  final BlockfrostUtxo utxo;
+  final CardanoUtxo utxo;
   final int derivationRole;
   final int derivationIndex;
 
@@ -94,14 +94,14 @@ class WalletSyncState {
   });
 }
 
-/// Discovers HD addresses (`0/i`, `1/i`, `2/0`) via gap-limit and aggregates balances from Blockfrost.
+/// Discovers HD addresses (`0/i`, `1/i`, `2/0`) via gap-limit and aggregates balances from Cardano Koios RPC.
 class HdWalletSyncService {
   static const int _batchSize = 6;
   static final Map<String, CardanoAccountPublicKey> _accountKeyCache = {};
 
-  final BlockfrostService blockfrost;
+  final CardanoRpcService cardanoRpc;
 
-  const HdWalletSyncService(this.blockfrost);
+  const HdWalletSyncService(this.cardanoRpc);
 
   CardanoAccountPublicKey _getAccountKey(String acctXvkBech32) {
     return _accountKeyCache[acctXvkBech32] ??=
@@ -111,7 +111,6 @@ class HdWalletSyncService {
   Future<_ChainScanResult> _scanChain({
     required CardanoAccountPublicKey accountKey,
     required CardanoNetwork network,
-    required String projectId,
     required int role,
     required int gapLimit,
   }) async {
@@ -122,39 +121,44 @@ class HdWalletSyncService {
     var index = 0;
 
     while (consecutiveEmpty < gapLimit) {
-      final indices = [for (var i = 0; i < _batchSize; i++) index + i];
+      final remaining = gapLimit - consecutiveEmpty;
+      final count = remaining < _batchSize ? remaining : _batchSize;
+      final indices = [for (var i = 0; i < count; i++) index + i];
       final addrs = [
         for (final idx in indices)
           accountKey.deriveBaseAddress(role: role, index: idx, network: network),
       ];
 
-      // 1. Check txs concurrently across the batch.
-      //    If an address has zero txs, it mathematically has zero UTXOs (saves 50% RTTs).
+      // 1. Batch-probe whether any address in this window has transactions at all.
+      final windowAnyTxs = await cardanoRpc.getAddressesTransactions(
+        network,
+        addrs,
+        count: 1,
+      );
+      if (windowAnyTxs.isEmpty) {
+        consecutiveEmpty += count;
+        index += count;
+        continue;
+      }
+
+      // 2. Check individual txs concurrently within the active window.
       final batchTxs = await Future.wait([
         for (final addr in addrs)
-          blockfrost.getAddressTransactions(network, projectId, addr, count: 10),
+          cardanoRpc.getAddressTransactions(network, addr, count: 10),
       ]);
 
-      final nonEmptySlots = <int>[
-        for (var i = 0; i < indices.length; i++)
-          if (batchTxs[i].isNotEmpty) i,
+      final nonEmptyAddrs = <String>[
+        for (var i = 0; i < addrs.length; i++)
+          if (batchTxs[i].isNotEmpty) addrs[i],
       ];
 
-      final batchUtxos = nonEmptySlots.isEmpty
-          ? const <List<BlockfrostUtxo>>[]
-          : await Future.wait([
-              for (final slot in nonEmptySlots)
-                blockfrost.getAddressUtxos(network, projectId, addrs[slot]),
-            ]);
-
-      final utxosBySlot = <int, List<BlockfrostUtxo>>{};
-      for (var k = 0; k < nonEmptySlots.length; k++) {
-        utxosBySlot[nonEmptySlots[k]] = batchUtxos[k];
-      }
+      final utxosByAddr = nonEmptyAddrs.isEmpty
+          ? const <String, List<CardanoUtxo>>{}
+          : await cardanoRpc.getAddressesUtxosBatch(network, nonEmptyAddrs);
 
       for (var i = 0; i < indices.length; i++) {
         final addrTxs = batchTxs[i];
-        final addrUtxos = utxosBySlot[i] ?? const <BlockfrostUtxo>[];
+        final addrUtxos = utxosByAddr[addrs[i]] ?? const <CardanoUtxo>[];
         if (addrTxs.isEmpty && addrUtxos.isEmpty) {
           consecutiveEmpty++;
           if (consecutiveEmpty >= gapLimit) break;
@@ -174,7 +178,7 @@ class HdWalletSyncService {
         }
       }
 
-      index += _batchSize;
+      index += count;
     }
 
     return _ChainScanResult(
@@ -186,36 +190,35 @@ class HdWalletSyncService {
 
   Future<WalletSyncState> syncProfile({
     required WatchOnlyProfile profile,
-    required String projectId,
     int gapLimit = 20,
   }) async {
     final accountKey = _getAccountKey(profile.acctXvkBech32);
     final network = profile.network;
     final stakeAddress = accountKey.deriveRewardAddress(network: network);
 
-    final pparamsFuture = blockfrost.getProtocolParameters(network, projectId);
-    final latestSlotFuture = blockfrost.getLatestSlot(network, projectId);
-    final stakeFuture = blockfrost.getStakeAccount(network, projectId, stakeAddress);
-    final extScanFuture = _scanChain(
-      accountKey: accountKey,
-      network: network,
-      projectId: projectId,
-      role: 0,
-      gapLimit: gapLimit,
-    );
-    final intScanFuture = _scanChain(
-      accountKey: accountKey,
-      network: network,
-      projectId: projectId,
-      role: 1,
-      gapLimit: gapLimit,
-    );
+    final results = await Future.wait([
+      cardanoRpc.getProtocolParameters(network),
+      cardanoRpc.getLatestSlot(network),
+      cardanoRpc.getStakeAccount(network, stakeAddress),
+      _scanChain(
+        accountKey: accountKey,
+        network: network,
+        role: 0,
+        gapLimit: gapLimit,
+      ),
+      _scanChain(
+        accountKey: accountKey,
+        network: network,
+        role: 1,
+        gapLimit: gapLimit,
+      ),
+    ]);
 
-    final pparams = await pparamsFuture;
-    final latestSlot = await latestSlotFuture;
-    final stakeInfo = await stakeFuture;
-    final extScan = await extScanFuture;
-    final intScan = await intScanFuture;
+    final pparams = results[0] as ProtocolParameters;
+    final latestSlot = results[1] as int;
+    final stakeInfo = results[2] as StakeAccountInfo;
+    final extScan = results[3] as _ChainScanResult;
+    final intScan = results[4] as _ChainScanResult;
 
     final utxos = <DerivedUtxo>[...extScan.utxos, ...intScan.utxos];
     final txByHash = <String, AddressTxSummary>{
@@ -231,31 +234,22 @@ class HdWalletSyncService {
     }
 
     final poolFuture = (stakeInfo.poolId != null && stakeInfo.poolId!.isNotEmpty)
-        ? blockfrost.getPoolTickerName(network, projectId, stakeInfo.poolId!)
+        ? cardanoRpc.getPoolTickerName(network, stakeInfo.poolId!)
         : Future<String?>.value(null);
 
     final poolName = await poolFuture;
     final assetKeys = totalMultiAsset.assets.keys.toList();
     final assetMeta = <String, AssetMetadataInfo>{};
-    const metaBatchSize = 5;
+    const metaBatchSize = 10;
     for (var i = 0; i < assetKeys.length; i += metaBatchSize) {
       final end = (i + metaBatchSize < assetKeys.length)
           ? i + metaBatchSize
           : assetKeys.length;
       final batch = assetKeys.sublist(i, end);
-      final results = await Future.wait([
-        for (final assetKey in batch)
-          blockfrost
-              .getAssetMetadata(network, projectId, assetKey.unit)
-              .then<AssetMetadataInfo?>((v) => v)
-              .catchError((_) => null),
-      ]);
-      for (var j = 0; j < batch.length; j++) {
-        final meta = results[j];
-        if (meta != null) {
-          assetMeta[batch[j].unit] = meta;
-        }
-      }
+      final batchResult = await cardanoRpc
+          .getAssetsMetadataBatch(network, batch)
+          .catchError((_) => const <String, AssetMetadataInfo>{});
+      assetMeta.addAll(batchResult);
     }
 
     final recentTxs = txByHash.values.toList()

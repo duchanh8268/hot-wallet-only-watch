@@ -5,7 +5,7 @@ import 'package:cardano_core/cardano_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hot_wallet_web/main.dart';
-import 'package:hot_wallet_web/services/blockfrost_service.dart';
+import 'package:hot_wallet_web/services/cardano_rpc_service.dart';
 import 'package:hot_wallet_web/services/conway_tx_builder.dart';
 import 'package:hot_wallet_web/services/external_link_stub.dart' as ext_link;
 import 'package:hot_wallet_web/services/hd_wallet_sync_service.dart';
@@ -47,110 +47,143 @@ void main() {
     master.dispose();
   });
 
-  MockClient createMockBlockfrostClient({
-    required String expectedProjectId,
+  MockClient createMockKoiosClient({
     bool stakeRegistered = false,
     String withdrawable = '0',
     String? drepId,
   }) {
-    final policyHex = List<int>.filled(28, 0xab);
+    final policyHex = hexEncode(List<int>.filled(28, 0xab));
     final assetHex = hexEncode(utf8.encode('SUNDAE'));
-    final unit = '${hexEncode(policyHex)}$assetHex';
 
     return MockClient((request) async {
-      expect(request.headers['project_id'], expectedProjectId);
       final path = request.url.path;
 
-      if (path.endsWith('/blocks/latest')) {
-        return http.Response(jsonEncode({'slot': 80000000}), 200);
+      if (path.endsWith('/tip')) {
+        return http.Response(jsonEncode([{'abs_slot': 80000000}]), 200);
       }
-      if (path.endsWith('/epochs/latest/parameters')) {
+      if (path.endsWith('/cli_protocol_params')) {
         return http.Response(
           jsonEncode({
-            'min_fee_a': 44,
-            'min_fee_b': 155381,
-            'coins_per_utxo_size': '4310',
-            'key_deposit': '2000000',
-            'pool_deposit': '500000000',
-            'max_tx_size': 16384,
+            'txFeePerByte': 44,
+            'txFeeFixed': 155381,
+            'utxoCostPerByte': 4310,
+            'stakeAddressDeposit': 2000000,
+            'stakePoolDeposit': 500000000,
+            'maxTxSize': 16384,
           }),
           200,
         );
       }
-      if (path.endsWith('/addresses/$addr0/utxos')) {
+      if (path.endsWith('/address_txs')) {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final addrs = (body['_addresses'] as List<dynamic>).cast<String>();
+        if (addrs.contains(addr0)) {
+          return http.Response(
+            jsonEncode([
+              {
+                'tx_hash': hexEncode(List<int>.filled(32, 0x99)),
+                'block_height': 123456,
+                'block_time': 1700000000,
+              },
+            ]),
+            200,
+          );
+        }
+        return http.Response(jsonEncode([]), 200);
+      }
+      if (path.endsWith('/address_utxos')) {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final addrs = (body['_addresses'] as List<dynamic>).cast<String>();
+        if (addrs.contains(addr0)) {
+          return http.Response(
+            jsonEncode([
+              {
+                'tx_hash': hexEncode(List<int>.filled(32, 0x11)),
+                'tx_index': 0,
+                'address': addr0,
+                'value': '20000000',
+                'asset_list': [],
+              },
+              {
+                'tx_hash': hexEncode(List<int>.filled(32, 0x22)),
+                'tx_index': 1,
+                'address': addr0,
+                'value': '5000000',
+                'asset_list': [
+                  {
+                    'policy_id': policyHex,
+                    'asset_name': assetHex,
+                    'quantity': '500',
+                  },
+                ],
+              },
+            ]),
+            200,
+          );
+        }
+        return http.Response(jsonEncode([]), 200);
+      }
+      if (path.endsWith('/account_info')) {
         return http.Response(
           jsonEncode([
             {
-              'tx_hash': hexEncode(List<int>.filled(32, 0x11)),
-              'output_index': 0,
-              'amount': [
-                {'unit': 'lovelace', 'quantity': '20000000'},
-              ],
-            },
-            {
-              'tx_hash': hexEncode(List<int>.filled(32, 0x22)),
-              'output_index': 1,
-              'amount': [
-                {'unit': 'lovelace', 'quantity': '5000000'},
-                {'unit': unit, 'quantity': '500'},
-              ],
+              'stake_address': stakeAddr,
+              'status': stakeRegistered ? 'registered' : 'not registered',
+              'total_balance': '25000000',
+              'rewards_available': withdrawable,
+              'delegated_pool': stakeRegistered
+                  ? CardanoAddress.encodePoolId(Uint8List.fromList(List<int>.filled(28, 0x77)))
+                  : null,
+              'delegated_drep': drepId,
             },
           ]),
           200,
         );
       }
-      if (path.contains('/addresses/') && path.endsWith('/utxos')) {
-        return http.Response(jsonEncode([]), 200);
-      }
-      if (path.endsWith('/addresses/$addr0/transactions')) {
+      if (path.endsWith('/asset_info')) {
         return http.Response(
           jsonEncode([
             {
-              'tx_hash': hexEncode(List<int>.filled(32, 0x99)),
-              'block_height': 123456,
-              'block_time': 1700000000,
+              'policy_id': policyHex,
+              'asset_name': assetHex,
+              'token_registry_metadata': {
+                'name': 'SundaeToken',
+                'ticker': 'SUNDAE',
+                'decimals': 0,
+              },
             },
           ]),
           200,
         );
       }
-      if (path.contains('/addresses/') && path.endsWith('/transactions')) {
-        return http.Response(jsonEncode([]), 200);
-      }
-      if (path.endsWith('/accounts/$stakeAddr')) {
-        return http.Response(
-          jsonEncode({
-            'active': stakeRegistered,
-            'controlled_amount': '25000000',
-            'withdrawable_amount': withdrawable,
-            'pool_id': stakeRegistered
-                ? CardanoAddress.encodePoolId(Uint8List.fromList(List<int>.filled(28, 0x77)))
-                : null,
-            'drep_id': drepId,
-          }),
-          200,
-        );
-      }
-      if (path.endsWith('/assets/$unit')) {
-        return http.Response(
-          jsonEncode({
-            'metadata': {'name': 'SundaeToken', 'ticker': 'SUNDAE', 'decimals': 0},
-          }),
-          200,
-        );
-      }
-      if (path.endsWith('/tx/submit')) {
+      if (path.endsWith('/submittx')) {
         return http.Response(jsonEncode(hexEncode(List<int>.filled(32, 0xee))), 200);
       }
       return http.Response('Not found', 404);
     });
   }
 
-  group('Blockfrost Sync & Conway Tx Builder E2E with Cold Wallet SEC-01', () {
+  group('Koios RPC Sync & Conway Tx Builder E2E with Cold Wallet SEC-01', () {
+    test('CardanoRpcService exposes keyless Cloudflare Worker Koios defaults', () {
+      final rpc = CardanoRpcService();
+      expect(
+        rpc.getRpcUrl('preprod'),
+        equals('https://cardano-koios-rpc.duchanh8268.workers.dev/preprod'),
+      );
+      expect(
+        rpc.getRpcUrl('preview'),
+        equals('https://cardano-koios-rpc.duchanh8268.workers.dev/preview'),
+      );
+      expect(
+        rpc.getRpcUrl('mainnet'),
+        equals('https://cardano-koios-rpc.duchanh8268.workers.dev/mainnet'),
+      );
+    });
+
     test('Syncs HD wallet, builds ADA + Token transfer, passes Cold SEC-01 & signs', () async {
-      final client = createMockBlockfrostClient(expectedProjectId: 'preprod_key_123');
-      final bf = BlockfrostService(client: client);
-      final syncSvc = HdWalletSyncService(bf);
+      final client = createMockKoiosClient();
+      final rpc = CardanoRpcService(client: client);
+      final syncSvc = HdWalletSyncService(rpc);
       final profile = WatchOnlyProfile(
         id: 'p1',
         name: 'Test Preprod',
@@ -161,7 +194,6 @@ void main() {
 
       final syncState = await syncSvc.syncProfile(
         profile: profile,
-        projectId: 'preprod_key_123',
         gapLimit: 5,
       );
       expect(syncState.totalLovelace, BigInt.from(25000000));
@@ -188,17 +220,16 @@ void main() {
         txBodyCbor: built.signRequest.txBodyCbor,
         witnesses: signResp.vkeyWitnesses,
       );
-      final submittedHash = await bf.submitTransaction(
+      final submittedHash = await rpc.submitTransaction(
         CardanoNetwork.preprod,
-        'preprod_key_123',
         assembled,
       );
       expect(submittedHash.replaceAll('"', ''), hexEncode(List<int>.filled(32, 0xee)));
     });
 
     test('Send Max sweeps all UTXOs with zero change output and passes SEC-01', () async {
-      final client = createMockBlockfrostClient(expectedProjectId: 'preprod_key_123');
-      final syncSvc = HdWalletSyncService(BlockfrostService(client: client));
+      final client = createMockKoiosClient();
+      final syncSvc = HdWalletSyncService(CardanoRpcService(client: client));
       final profile = WatchOnlyProfile(
         id: 'p1',
         name: 'Sweep',
@@ -208,7 +239,6 @@ void main() {
       );
       final syncState = await syncSvc.syncProfile(
         profile: profile,
-        projectId: 'preprod_key_123',
         gapLimit: 5,
       );
 
@@ -231,11 +261,10 @@ void main() {
     });
 
     test('Builds Conway Staking (Reg + Pool + AlwaysAbstain) and Reward Withdrawal passing SEC-01', () async {
-      final client = createMockBlockfrostClient(
-        expectedProjectId: 'preprod_key_123',
+      final client = createMockKoiosClient(
         stakeRegistered: false,
       );
-      final syncSvc = HdWalletSyncService(BlockfrostService(client: client));
+      final syncSvc = HdWalletSyncService(CardanoRpcService(client: client));
       final profile = WatchOnlyProfile(
         id: 'p1',
         name: 'Staker',
@@ -245,7 +274,6 @@ void main() {
       );
       final syncState = await syncSvc.syncProfile(
         profile: profile,
-        projectId: 'preprod_key_123',
         gapLimit: 5,
       );
 
@@ -279,14 +307,13 @@ void main() {
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
       });
-      final mockClient = createMockBlockfrostClient(expectedProjectId: 'preprod_test_id');
+      final mockClient = createMockKoiosClient();
       final appState = HotAppState(
         storage: WebCryptoStorage(),
-        blockfrost: BlockfrostService(client: mockClient),
+        cardanoRpc: CardanoRpcService(client: mockClient),
       );
       await appState.init();
       await appState.saveSettings(
-        projectIds: {CardanoNetwork.preprod: 'preprod_test_id'},
         gapLimit: 5,
       );
 

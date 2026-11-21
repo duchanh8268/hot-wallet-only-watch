@@ -38,18 +38,14 @@ class HotStrings {
   String get parseUrBtn => isVi ? 'Nạp chuỗi UR' : 'Load UR String';
 
   // Settings
-  String get settingsTitle => isVi ? 'Cấu hình Blockfrost API theo từng mạng' : 'Per-Network Blockfrost API Settings';
+  String get settingsTitle => isVi ? 'Cấu hình RPC & Bảo mật Ví Nóng' : 'Hot Wallet RPC & Security Settings';
   String get webCryptoBadge => isVi
       ? 'Mã hóa bằng Web Crypto API (SubtleCrypto AES-256-GCM • Non-Extractable Key trong IndexedDB)'
       : 'Encrypted via Web Crypto API (SubtleCrypto AES-256-GCM • Non-Extractable Key in IndexedDB)';
-  String projectIdLabel(String net) => 'Blockfrost Project ID ($net)';
   String get saveSettingsBtn => isVi ? 'Lưu cấu hình mã hóa' : 'Save Encrypted Settings';
   String get testConnectionBtn => isVi ? 'Kiểm tra kết nối' : 'Test Connection';
   String get gapLimitLabel => isVi ? 'Giới hạn quét HD (Gap Limit)' : 'HD Discovery Gap Limit';
   String get settingsSaved => isVi ? 'Đã lưu và mã hóa trong IndexedDB!' : 'Saved and encrypted in IndexedDB!';
-  String get missingApiKey => isVi
-      ? 'Chưa nhập Blockfrost Project ID cho mạng hiện tại. Vào tab Cài đặt API để thiết lập.'
-      : 'Blockfrost Project ID not configured for the active network. Open API Settings tab.';
 
   // Dashboard
   String get totalAda => isVi ? 'Số Dư Khả Dụng' : 'Available Balance';

@@ -156,10 +156,8 @@ class _BroadcastFlowScreenState extends State<BroadcastFlowScreen> {
     });
     try {
       final net = widget.appState.network;
-      final key = widget.appState.activeProjectId;
-      final hash = await widget.appState.blockfrost.submitTransaction(
+      final hash = await widget.appState.cardanoRpc.submitTransaction(
         net,
-        key,
         cbor,
       );
       if (!mounted) return;
@@ -181,9 +179,8 @@ class _BroadcastFlowScreenState extends State<BroadcastFlowScreen> {
       final hash = _txHash;
       if (hash == null || !mounted || _confirmed) return;
       try {
-        final ok = await widget.appState.blockfrost.isTransactionConfirmed(
+        final ok = await widget.appState.cardanoRpc.isTransactionConfirmed(
           widget.appState.network,
-          widget.appState.activeProjectId,
           hash,
         );
         if (ok && mounted) {

@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../l10n/app_strings.dart';
-import '../services/blockfrost_service.dart';
+import '../services/cardano_rpc_service.dart';
 import '../services/hd_wallet_sync_service.dart';
 import '../services/hot_app_state.dart';
 import '../theme/hot_theme.dart';
@@ -490,61 +490,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-        if (widget.appState.activeProjectId.trim().isEmpty) ...[
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: HotTheme.warningSurface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: HotTheme.warning.withValues(alpha: 0.5)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.warning_amber_rounded, color: HotTheme.warning, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        s.missingApiKey,
-                        style: const TextStyle(fontSize: 12, color: HotTheme.textPrimary),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    OutlinedButton(
-                      onPressed: widget.appState.loadDemoPreprodData,
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(44, 36),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      ),
-                      child: Text(
-                        s.isVi ? 'Nạp Demo UTXO' : 'Load Demo UTXOs',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: widget.onOpenSettings,
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size(44, 36),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      ),
-                      child: Text(s.tabSettings),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
         if (widget.appState.syncError != null) ...[
           Container(
             padding: const EdgeInsets.all(12),
