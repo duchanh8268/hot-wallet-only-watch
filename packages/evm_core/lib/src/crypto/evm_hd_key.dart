@@ -33,16 +33,19 @@ class EvmHdKey {
     }
     final hmac = Hmac(sha512, utf8.encode('Bitcoin seed'));
     final i = Uint8List.fromList(hmac.convert(seed).bytes);
+    try {
+      final il = Uint8List.sublistView(i, 0, 32);
+      final ir = Uint8List.sublistView(i, 32, 64);
 
-    final il = Uint8List.sublistView(i, 0, 32);
-    final ir = Uint8List.sublistView(i, 32, 64);
-
-    return EvmHdKey(
-      privateKey: il,
-      chainCode: ir,
-      depth: 0,
-      childIndex: 0,
-    );
+      return EvmHdKey(
+        privateKey: il,
+        chainCode: ir,
+        depth: 0,
+        childIndex: 0,
+      );
+    } finally {
+      zeroize(i);
+    }
   }
 
   /// Derives a child private key at [index]. Hardened index when [index] >= 0x80000000.
@@ -51,7 +54,7 @@ class EvmHdKey {
     final indexBytes = Uint8List(4)
       ..buffer.asByteData().setUint32(0, index, Endian.big);
 
-    final List<int> data;
+    final Uint8List data;
     if (isHardened) {
       data = concatBytes([
         Uint8List.fromList([0x00]),
@@ -68,24 +71,30 @@ class EvmHdKey {
 
     final hmac = Hmac(sha512, chainCode);
     final i = Uint8List.fromList(hmac.convert(data).bytes);
-    final il = Uint8List.sublistView(i, 0, 32);
-    final ir = Uint8List.sublistView(i, 32, 64);
+    Uint8List? childPriv;
+    try {
+      final il = Uint8List.sublistView(i, 0, 32);
+      final ir = Uint8List.sublistView(i, 32, 64);
 
-    final ilNum = _bytesToBigInt(il);
-    final pNum = _bytesToBigInt(privateKey);
-    final childPrivNum = (ilNum + pNum) % Secp256k1.n;
+      final ilNum = _bytesToBigInt(il);
+      final pNum = _bytesToBigInt(privateKey);
+      final childPrivNum = (ilNum + pNum) % Secp256k1.n;
 
-    if (ilNum >= Secp256k1.n || childPrivNum == BigInt.zero) {
-      // Very rare invalid key, try next index per BIP-32
-      return deriveChild(index + 1);
+      if (ilNum >= Secp256k1.n || childPrivNum == BigInt.zero) {
+        // Very rare invalid key, try next index per BIP-32
+        return deriveChild(index + 1);
+      }
+
+      childPriv = _bigIntTo32Bytes(childPrivNum);
+      return EvmHdKey(
+        privateKey: childPriv,
+        chainCode: ir,
+        depth: depth + 1,
+        childIndex: index,
+      );
+    } finally {
+      zeroizeAll([data, i, childPriv]);
     }
-
-    return EvmHdKey(
-      privateKey: _bigIntTo32Bytes(childPrivNum),
-      chainCode: ir,
-      depth: depth + 1,
-      childIndex: index,
-    );
   }
 
   /// Derives along a path like "m/44'/60'/0'/0/0".
@@ -104,7 +113,11 @@ class EvmHdKey {
       }
       final idx = int.parse(part);
       final finalIdx = hardened ? (idx | 0x80000000) : idx;
-      current = current.deriveChild(finalIdx);
+      final next = current.deriveChild(finalIdx);
+      if (current != this) {
+        current.dispose();
+      }
+      current = next;
     }
 
     return current;

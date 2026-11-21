@@ -306,6 +306,8 @@ void _writeBigUintHeader(BytesBuilder out, int majorType, BigInt value) {
 }
 
 class _CborReader {
+  static const int maxDepth = 64;
+
   final Uint8List bytes;
   int offset = 0;
 
@@ -355,7 +357,24 @@ class _CborReader {
     throw FormatException('Invalid CBOR additional info: $addInfo');
   }
 
-  CborValue readValue() {
+  int _readLength(int addInfo, {int bytesPerElement = 1}) {
+    final bigLen = _readArg(addInfo);
+    final remaining = bytes.length - offset;
+    final requiredMinBytes = bigLen * BigInt.from(bytesPerElement);
+    if (bigLen < BigInt.zero ||
+        !bigLen.isValidInt ||
+        requiredMinBytes > BigInt.from(remaining)) {
+      throw FormatException(
+        'CBOR length ($bigLen) exceeds remaining bytes ($remaining)',
+      );
+    }
+    return bigLen.toInt();
+  }
+
+  CborValue readValue({int depth = 0}) {
+    if (depth > maxDepth) {
+      throw const FormatException('CBOR maximum nesting depth ($maxDepth) exceeded');
+    }
     final initial = _readByte();
     final majorType = (initial >> 5) & 0x07;
     final addInfo = initial & 0x1f;
@@ -376,7 +395,7 @@ class _CborReader {
               offset++;
               break;
             }
-            final chunk = readValue();
+            final chunk = readValue(depth: depth + 1);
             if (chunk is! CborBytes) {
               throw const FormatException('Invalid chunk inside indefinite CBOR byte string');
             }
@@ -384,7 +403,7 @@ class _CborReader {
           }
           return CborBytes(builder.toBytes());
         }
-        final len = _readArg(addInfo).toInt();
+        final len = _readLength(addInfo);
         return CborBytes(_readBytes(len));
       case 3:
         if (addInfo == 31) {
@@ -397,7 +416,7 @@ class _CborReader {
               offset++;
               break;
             }
-            final chunk = readValue();
+            final chunk = readValue(depth: depth + 1);
             if (chunk is! CborText) {
               throw const FormatException('Invalid chunk inside indefinite CBOR text string');
             }
@@ -405,7 +424,7 @@ class _CborReader {
           }
           return CborText(sb.toString());
         }
-        final len = _readArg(addInfo).toInt();
+        final len = _readLength(addInfo);
         return CborText(utf8.decode(_readBytes(len)));
       case 4:
         if (addInfo == 31) {
@@ -418,13 +437,13 @@ class _CborReader {
               offset++;
               break;
             }
-            items.add(readValue());
+            items.add(readValue(depth: depth + 1));
           }
           return CborArray(items, indefinite: true);
         }
-        final count = _readArg(addInfo).toInt();
+        final count = _readLength(addInfo);
         final items = <CborValue>[
-          for (var i = 0; i < count; i++) readValue(),
+          for (var i = 0; i < count; i++) readValue(depth: depth + 1),
         ];
         return CborArray(items);
       case 5:
@@ -439,30 +458,34 @@ class _CborReader {
               offset++;
               break;
             }
-            final k = readValue();
+            final k = readValue(depth: depth + 1);
             final kHex = hexEncode(k.encode());
             if (!seenKeys.add(kHex)) {
               throw const FormatException('Duplicate CBOR map key detected');
             }
-            final v = readValue();
+            final v = readValue(depth: depth + 1);
             entries.add(CborMapEntry(k, v));
           }
           return CborMap(entries, canonicalSort: false);
         }
-        final count = _readArg(addInfo).toInt();
+        final count = _readLength(addInfo, bytesPerElement: 2);
         for (var i = 0; i < count; i++) {
-          final k = readValue();
+          final k = readValue(depth: depth + 1);
           final kHex = hexEncode(k.encode());
           if (!seenKeys.add(kHex)) {
             throw const FormatException('Duplicate CBOR map key detected');
           }
-          final v = readValue();
+          final v = readValue(depth: depth + 1);
           entries.add(CborMapEntry(k, v));
         }
         return CborMap(entries, canonicalSort: false);
       case 6:
-        final tag = _readArg(addInfo).toInt();
-        final val = readValue();
+        final tagBig = _readArg(addInfo);
+        if (tagBig.isNegative || !tagBig.isValidInt) {
+          throw FormatException('CBOR tag out of int range: $tagBig');
+        }
+        final tag = tagBig.toInt();
+        final val = readValue(depth: depth + 1);
         return CborTag(tag, val);
       case 7:
         if (addInfo == 20) return const CborBool(false);

@@ -198,4 +198,77 @@ void main() {
       }
     });
   });
+
+  group('AUDIT-16: CBOR & FountainDecoder DoS Hardening', () {
+    test('Rejects CBOR 64-bit length overflow and deep nesting without crash', () {
+      // Malicious byte string claiming 2^64-1 bytes (0x5b ffffffff ffffffff)
+      expect(
+        () => CborValue.decode(
+          Uint8List.fromList([0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00]),
+        ),
+        throwsFormatException,
+      );
+      // Malicious array claiming 2^64-1 items (0x9b ffffffff ffffffff)
+      expect(
+        () => CborValue.decode(
+          Uint8List.fromList([0x9b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+        ),
+        throwsFormatException,
+      );
+      // Deeply nested arrays exceeding maxDepth (80 nested 1-element arrays + null)
+      final deepCbor = Uint8List.fromList([
+        ...List<int>.filled(80, 0x81),
+        0xf6,
+      ]);
+      expect(
+        () => CborValue.decode(deepCbor),
+        throwsFormatException,
+      );
+    });
+
+    test('FountainDecoder bounds _processedPartSeqs against memory exhaustion', () {
+      final dec = FountainDecoder();
+      const seqLen = 10;
+      const checksum = 999;
+      final maxSeqLimit = seqLen * 16 + 64; // 224
+
+      var seq = 1;
+      var acceptedCount = 0;
+      while (acceptedCount < maxSeqLimit) {
+        final indexes = FountainUtils.chooseFragments(seq, seqLen, checksum);
+        if (!indexes.contains(0)) {
+          dec.receivePart(
+            FountainPart(
+              seqNum: seq,
+              seqLen: seqLen,
+              messageLen: 64,
+              checksum: checksum,
+              data: Uint8List(32),
+            ),
+          );
+          acceptedCount++;
+        }
+        seq++;
+      }
+
+      expect(dec.isComplete, isFalse);
+      expect(dec.receivedPartCount, equals(maxSeqLimit));
+
+      // Next distinct seqNum exceeding maxSeqLimit must be rejected
+      while (FountainUtils.chooseFragments(seq, seqLen, checksum).contains(0)) {
+        seq++;
+      }
+      final acceptedOverflow = dec.receivePart(
+        FountainPart(
+          seqNum: seq,
+          seqLen: seqLen,
+          messageLen: 64,
+          checksum: checksum,
+          data: Uint8List(32),
+        ),
+      );
+      expect(acceptedOverflow, isFalse);
+      expect(dec.receivedPartCount, equals(maxSeqLimit));
+    });
+  });
 }

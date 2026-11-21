@@ -64,5 +64,129 @@ void main() {
         equals('0xbe609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2'),
       );
     });
+
+    test('AUDIT-12: enforces uint/int bounds, address/bytesN lengths, fixed arrays, and recursion maxDepth', () {
+      const domain = Eip712Domain(name: 'Test', version: '1', chainId: 1);
+
+      // Negative value into uint256 throws
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'amount', type: 'uint256')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'amount': -1},
+          ),
+        ),
+        throwsArgumentError,
+      );
+
+      // Overflow uint8 throws; valid int8 negative works
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'val', type: 'uint8')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'val': 256},
+          ),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'val', type: 'int8')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'val': -129},
+          ),
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'val', type: 'int8')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'val': -128},
+          ),
+        ).length,
+        32,
+      );
+
+      // Invalid address length / bad checksum throws
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'to', type: 'address')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'to': '0x1234'},
+          ),
+        ),
+        throwsArgumentError,
+      );
+
+      // Invalid bytes4 length throws
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'sig', type: 'bytes4')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'sig': '0xdeadbeef00'},
+          ),
+        ),
+        throwsArgumentError,
+      );
+
+      // Fixed-size array length mismatch throws
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Payload': [Eip712TypeProperty(name: 'nums', type: 'uint256[2]')],
+            },
+            primaryType: 'Payload',
+            domain: domain,
+            message: {'nums': [1]},
+          ),
+        ),
+        throwsArgumentError,
+      );
+
+      // Deep recursive structs exceeding maxDepth throw instead of StackOverflowError
+      Map<String, dynamic> deepNode = {'next': <String, dynamic>{}};
+      for (var i = 0; i <= Eip712Hasher.maxDepth + 2; i++) {
+        deepNode = {'next': deepNode};
+      }
+      expect(
+        () => Eip712Hasher.hashTypedData(
+          Eip712TypedData(
+            types: const {
+              'Node': [Eip712TypeProperty(name: 'next', type: 'Node')],
+            },
+            primaryType: 'Node',
+            domain: domain,
+            message: deepNode,
+          ),
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 }

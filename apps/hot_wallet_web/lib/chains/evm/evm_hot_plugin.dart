@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:chain_core_interface/chain_core_interface.dart';
 import 'package:evm_core/evm_core.dart';
+import '../../core/models/chain_tx_record.dart';
 import 'services/evm_rpc_service.dart';
 import 'services/hyperliquid_service.dart';
 
@@ -114,11 +115,20 @@ class EvmHotPlugin implements IHotChainPlugin {
         final state = await hlService.getUserState(network.id, address);
         final margin = state['marginSummary'] as Map<String, dynamic>? ?? {};
         final accountValue = margin['accountValue']?.toString() ?? '0';
+        List<ChainTxRecord> recentTxs = const [];
+        String? historyError;
+        try {
+          recentTxs = await hlService.getRecentActivity(network.id, address);
+        } catch (e) {
+          historyError = e.toString();
+        }
         return {
           'address': address,
           'network': network.id,
           'accountValueUsd': accountValue,
           'raw': state,
+          'recentTxs': recentTxs,
+          'historyError': ?historyError,
         };
       } catch (e) {
         return {
@@ -132,11 +142,20 @@ class EvmHotPlugin implements IHotChainPlugin {
       try {
         final balanceWei = await rpcService.getBalance(network.id, address);
         final nonce = await rpcService.getTransactionCount(network.id, address);
+        List<ChainTxRecord> recentTxs = const [];
+        String? historyError;
+        try {
+          recentTxs = await rpcService.getRecentTxs(network.id, address);
+        } catch (e) {
+          historyError = e.toString();
+        }
         return {
           'address': address,
           'network': network.id,
           'balanceWei': balanceWei.toString(),
           'nonce': nonce.toString(),
+          'recentTxs': recentTxs,
+          'historyError': ?historyError,
         };
       } catch (e) {
         return {

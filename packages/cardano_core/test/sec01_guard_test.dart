@@ -545,5 +545,58 @@ void main() {
         ),
       );
     });
+
+    test('AUDIT-20: Blocks Reward/Stake address used as spendable TxOutput address', () {
+      final stakeAddr = walletKey.deriveRewardAddress(network: CardanoNetwork.preprod);
+      final stakeAddrBytes = CardanoAddress.decode(stakeAddr).rawBytes;
+      final inAddr = walletKey.deriveBaseAddressBytes(role: 0, index: 0, network: CardanoNetwork.preprod);
+      final inputHash = Uint8List(32)..[0] = 0x11;
+
+      final badBody = ConwayTxBody(
+        inputs: [TxInput(txHash: inputHash, index: 0)],
+        outputs: [
+          TxOutput(
+            addressBytes: stakeAddrBytes,
+            lovelace: BigInt.from(2000000),
+          ),
+        ],
+        fee: BigInt.from(180000),
+        ttl: 1000,
+        networkId: CardanoNetwork.preprod.networkTag,
+      );
+
+      final badReq = CardanoSignRequestUr(
+        requestId: Uint8List(16),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(badBody),
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: inputHash,
+            outputIndex: 0,
+            addressBytes: inAddr,
+            lovelace: BigInt.from(2180000),
+            derivationRole: 0,
+            derivationIndex: 0,
+          ),
+        ],
+        changeOutputs: const [],
+        requireStakeWitness: false,
+      );
+
+      expect(
+        () => Sec01Guard.audit(
+          request: badReq,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.malformedTxBody,
+          ),
+        ),
+      );
+    });
   });
 }

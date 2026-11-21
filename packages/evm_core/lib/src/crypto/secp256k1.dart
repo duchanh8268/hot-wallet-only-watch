@@ -91,6 +91,7 @@ class Secp256k1 {
   }
 
   /// Verifies secp256k1 signature against 64-byte uncompressed public key.
+  /// Enforces canonical low-S and valid curve bounds (`0 < r < n`, `0 < s <= n/2`).
   static bool verify(
     Uint8List messageHash,
     Uint8List r,
@@ -98,12 +99,25 @@ class Secp256k1 {
     Uint8List publicKey64,
   ) {
     try {
+      if (messageHash.length != 32 ||
+          r.length != 32 ||
+          s.length != 32 ||
+          publicKey64.length != 64) {
+        return false;
+      }
       final rVal = _bytesToBigInt(r);
       final sVal = _bytesToBigInt(s);
+      if (rVal <= BigInt.zero ||
+          rVal >= n ||
+          sVal <= BigInt.zero ||
+          sVal > halfN) {
+        return false;
+      }
       final xVal = _bytesToBigInt(publicKey64.sublist(0, 32));
       final yVal = _bytesToBigInt(publicKey64.sublist(32, 64));
 
       final q = params.curve.createPoint(xVal, yVal);
+      if (q.isInfinity) return false;
       final pubKey = pc.ECPublicKey(q, params);
 
       final verifier = pc.ECDSASigner();

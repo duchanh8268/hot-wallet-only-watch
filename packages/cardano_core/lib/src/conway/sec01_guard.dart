@@ -275,6 +275,13 @@ class Sec01Guard {
     for (var i = 0; i < txBody.outputs.length; i++) {
       final out = txBody.outputs[i];
       _assertAddressNetwork(out.addressBytes, expectedNetwork, 'output #$i');
+      final addrType = (out.addressBytes[0] >> 4) & 0x0f;
+      if (addrType == 0x0e || addrType == 0x0f) {
+        throw Sec01SecurityException(
+          Sec01ErrorCode.malformedTxBody,
+          'SECURITY ALERT: Output #$i uses a Reward/Stake address which cannot be spent cleanly in UTXO outputs.',
+        );
+      }
       final bech32Addr = CardanoAddress.encodeBytes(out.addressBytes);
 
       totalOutputLovelace += out.lovelace;

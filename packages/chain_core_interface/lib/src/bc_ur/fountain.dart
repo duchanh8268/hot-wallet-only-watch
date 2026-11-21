@@ -229,6 +229,7 @@ class FountainDecoder {
   static const int maxAllowedMessageLen = 262144; // 256 KB
   static const int maxAllowedFragmentLen = 4096;
   static const int maxMixedParts = 512;
+  static const int maxProcessedSeqs = maxAllowedSeqLen * 8; // 16384
 
   int? _expectedSeqLen;
   int? _expectedMessageLen;
@@ -263,7 +264,8 @@ class FountainDecoder {
   bool receivePart(FountainPart part) {
     if (_result != null) return true;
 
-    if (part.seqLen <= 0 ||
+    if (part.seqNum <= 0 ||
+        part.seqLen <= 0 ||
         part.seqLen > maxAllowedSeqLen ||
         part.messageLen < 0 ||
         part.messageLen > maxAllowedMessageLen ||
@@ -286,9 +288,14 @@ class FountainDecoder {
       }
     }
 
-    if (!_processedPartSeqs.add(part.seqNum)) {
+    if (_processedPartSeqs.contains(part.seqNum)) {
       return true; // Already seen this sequence number
     }
+    final maxSeqLimit = math.min(maxProcessedSeqs, part.seqLen * 16 + 64);
+    if (_processedPartSeqs.length >= maxSeqLimit) {
+      return false;
+    }
+    _processedPartSeqs.add(part.seqNum);
 
     final indexes = FountainUtils.chooseFragments(
       part.seqNum,

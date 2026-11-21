@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart' as pc;
+import '../crypto/bytes_utils.dart';
 import 'bip39_wordlist.dart';
 
 export 'bip39_wordlist.dart' show bip39EnglishWordlist;
@@ -91,9 +92,13 @@ class Bip39 {
   static Uint8List mnemonicToSeed(String mnemonic, {String passphrase = ''}) {
     final passBytes = Uint8List.fromList(utf8.encode(mnemonic.trim()));
     final saltBytes = Uint8List.fromList(utf8.encode('mnemonic$passphrase'));
-    final derivator = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA512Digest(), 128));
-    derivator.init(pc.Pbkdf2Parameters(saltBytes, 2048, 64));
-    return derivator.process(passBytes);
+    try {
+      final derivator = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA512Digest(), 128));
+      derivator.init(pc.Pbkdf2Parameters(saltBytes, 2048, 64));
+      return derivator.process(passBytes);
+    } finally {
+      zeroizeAll([passBytes, saltBytes]);
+    }
   }
 
   /// Derives 64-byte seed directly from [entropy] and optional [passphrase].

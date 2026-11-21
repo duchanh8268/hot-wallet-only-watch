@@ -77,7 +77,7 @@ class Eip1559Transaction implements EvmTransaction {
     required this.value,
     Uint8List? data,
     this.accessList = const [],
-  })  : to = Eip55.toChecksumAddress(to),
+  })  : to = to.trim().isEmpty ? '' : Eip55.toChecksumAddress(to),
         data = data ?? Uint8List(0);
 
   @override
@@ -114,7 +114,7 @@ class LegacyTransaction implements EvmTransaction {
     required String to,
     required this.value,
     Uint8List? data,
-  })  : to = Eip55.toChecksumAddress(to),
+  })  : to = to.trim().isEmpty ? '' : Eip55.toChecksumAddress(to),
         data = data ?? Uint8List(0);
 
   @override

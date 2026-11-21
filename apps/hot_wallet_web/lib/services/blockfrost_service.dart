@@ -46,17 +46,30 @@ class ProtocolParameters {
         v == null ? fallback : int.tryParse(v.toString()) ?? fallback;
     BigInt parseBigInt(dynamic v, BigInt fallback) =>
         v == null ? fallback : BigInt.tryParse(v.toString()) ?? fallback;
+    BigInt clampBigInt(BigInt val, BigInt minVal, BigInt maxVal) {
+      if (val < minVal) return minVal;
+      if (val > maxVal) return maxVal;
+      return val;
+    }
 
     return ProtocolParameters(
-      minFeeA: parseInt(json['min_fee_a'], 44),
-      minFeeB: parseInt(json['min_fee_b'], 155381),
+      minFeeA: parseInt(json['min_fee_a'], 44).clamp(1, 5000),
+      minFeeB: parseInt(json['min_fee_b'], 155381).clamp(0, 5000000),
       coinsPerUTxOByte: parseInt(
         json['coins_per_utxo_size'] ?? json['coins_per_utxo_word'],
         4310,
+      ).clamp(1000, 100000),
+      keyDeposit: clampBigInt(
+        parseBigInt(json['key_deposit'], BigInt.from(2000000)),
+        BigInt.zero,
+        BigInt.from(20000000),
       ),
-      keyDeposit: parseBigInt(json['key_deposit'], BigInt.from(2000000)),
-      poolDeposit: parseBigInt(json['pool_deposit'], BigInt.from(500000000)),
-      maxTxSize: parseInt(json['max_tx_size'], 16384),
+      poolDeposit: clampBigInt(
+        parseBigInt(json['pool_deposit'], BigInt.from(500000000)),
+        BigInt.zero,
+        BigInt.from(2000000000),
+      ),
+      maxTxSize: parseInt(json['max_tx_size'], 16384).clamp(4096, 65536),
     );
   }
 }

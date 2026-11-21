@@ -17,6 +17,12 @@ dependencies:
     path: ../../packages/chain_core_interface
   evm_core:
     path: ../../packages/evm_core
+  bitcoin_core:
+    path: ../../packages/bitcoin_core
+  solana_core:
+    path: ../../packages/solana_core
+  sui_core:
+    path: ../../packages/sui_core
   http: ^1.2.2
   qr_flutter: ^4.1.0
   web: ^1.1.0

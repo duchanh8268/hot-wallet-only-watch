@@ -15,9 +15,9 @@ class CardanoHotPlugin implements IHotChainPlugin {
 
   @override
   List<ChainNetwork> get supportedNetworks => const [
-        ChainNetwork(id: 'preprod', name: 'Preprod Testnet', isTestnet: true, networkCode: 0),
-        ChainNetwork(id: 'preview', name: 'Preview Testnet', isTestnet: true, networkCode: 0),
-        ChainNetwork(id: 'mainnet', name: 'Cardano Mainnet', isTestnet: false, networkCode: 1),
+        ChainNetwork(id: 'preprod', name: 'Preprod (Testnet)', isTestnet: true, networkCode: 0),
+        ChainNetwork(id: 'preview', name: 'Preview (Testnet)', isTestnet: true, networkCode: 0),
+        ChainNetwork(id: 'mainnet', name: 'Mainnet', isTestnet: false, networkCode: 1),
       ];
 
   @override

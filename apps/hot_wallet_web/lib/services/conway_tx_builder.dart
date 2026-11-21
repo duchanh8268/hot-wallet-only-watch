@@ -286,8 +286,22 @@ class ConwayTxBuilder {
         changeMinAda =
             finalLeftoverAssets.isNotEmpty ? minAdaForChange : pureAdaMinUtxo;
       } else {
-        // Non-recoverable dust (< minUTxO with no extra UTXOs) absorbed into fee
+        // Non-recoverable dust (< minUTxO with no extra UTXOs) absorbed into fee,
+        // bounded to prevent accidental over-burning if pparams/inputs look abnormal.
+        final maxAbsorbedDust = BigInt.from(1500000); // 1.5 ADA
+        if (surplus < BigInt.zero || surplus > maxAbsorbedDust) {
+          throw Exception(
+            'Surplus ($surplus lovelace) exceeds safe dust absorption limit ($maxAbsorbedDust)',
+          );
+        }
         actualFee += surplus;
+      }
+
+      final maxSafeFee = BigInt.from(10000000); // 10 ADA sanity guard
+      if (actualFee > maxSafeFee) {
+        throw Exception(
+          'Calculated transaction fee ($actualFee lovelace) exceeds 10 ADA safety limit',
+        );
       }
 
       final txBody = ConwayTxBody(

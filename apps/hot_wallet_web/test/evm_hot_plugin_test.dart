@@ -115,5 +115,14 @@ void main() {
       );
       expect(resp['status'], equals('ok'));
     });
+
+    test('EvmRpcService uses PublicNode mainnet default and supports resetToDefaultRpcUrl', () {
+      final rpc = EvmRpcService();
+      expect(rpc.getRpcUrl('mainnet'), equals('https://ethereum-rpc.publicnode.com'));
+      rpc.setCustomRpcUrl('mainnet', 'https://custom-eth.example');
+      expect(rpc.getRpcUrl('mainnet'), equals('https://custom-eth.example'));
+      rpc.resetToDefaultRpcUrl('mainnet');
+      expect(rpc.getRpcUrl('mainnet'), equals('https://ethereum-rpc.publicnode.com'));
+    });
   });
 }

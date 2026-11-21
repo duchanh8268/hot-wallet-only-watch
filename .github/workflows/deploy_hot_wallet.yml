@@ -29,18 +29,12 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Analyze and test cardano_core
-        working-directory: packages/cardano_core
+      - name: Analyze and test core packages
         run: |
-          dart pub get
-          dart analyze
-          dart test
-
-      - name: Analyze chain_core_interface
-        working-directory: packages/chain_core_interface
-        run: |
-          dart pub get
-          dart analyze
+          for pkg in chain_core_interface cardano_core bitcoin_core evm_core solana_core sui_core; do
+            echo "=== $pkg ==="
+            (cd "packages/$pkg" && dart pub get && dart analyze && ([ ! -d test ] || dart test))
+          done
 
       - name: Analyze, test, and build hot_wallet_web
         working-directory: apps/hot_wallet_web

@@ -1,11 +1,15 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import '../address/eip55.dart';
 import '../crypto/bytes_utils.dart';
 import '../crypto/keccak256.dart';
 import 'eip712_types.dart';
 
 /// Implements standard EIP-712 hashing (v4).
 class Eip712Hasher {
+  static const int maxDepth = 16;
+  static final RegExp _intTypeRegex = RegExp(r'^(u?)int(\d+)$');
+
   const Eip712Hasher._();
 
   /// Computes final 32-byte signing hash:
@@ -48,9 +52,13 @@ class Eip712Hasher {
     required String primaryType,
     required Map<String, dynamic> data,
     required Map<String, List<Eip712TypeProperty>> types,
+    int depth = 0,
   }) {
+    if (depth > maxDepth) {
+      throw ArgumentError('EIP-712 maximum nesting depth ($maxDepth) exceeded');
+    }
     final typeHashBytes = hashType(primaryType, types);
-    final encodedData = encodeData(primaryType, data, types);
+    final encodedData = encodeData(primaryType, data, types, depth);
     return Keccak256.hash(concatBytes([typeHashBytes, encodedData]));
   }
 
@@ -90,8 +98,12 @@ class Eip712Hasher {
   static Uint8List encodeData(
     String primaryType,
     Map<String, dynamic> data,
-    Map<String, List<Eip712TypeProperty>> types,
-  ) {
+    Map<String, List<Eip712TypeProperty>> types, [
+    int depth = 0,
+  ]) {
+    if (depth > maxDepth) {
+      throw ArgumentError('EIP-712 maximum nesting depth ($maxDepth) exceeded');
+    }
     final props = types[primaryType];
     if (props == null) {
       throw ArgumentError('Type not defined: $primaryType');
@@ -100,7 +112,7 @@ class Eip712Hasher {
     final chunks = <Uint8List>[];
     for (final prop in props) {
       final val = data[prop.name];
-      chunks.add(_encodeField(prop.type, val, types));
+      chunks.add(_encodeField(prop.type, val, types, depth));
     }
 
     return concatBytes(chunks);
@@ -109,72 +121,157 @@ class Eip712Hasher {
   static Uint8List _encodeField(
     String type,
     dynamic val,
-    Map<String, List<Eip712TypeProperty>> types,
-  ) {
+    Map<String, List<Eip712TypeProperty>> types, [
+    int depth = 0,
+  ]) {
+    if (depth > maxDepth) {
+      throw ArgumentError('EIP-712 maximum nesting depth ($maxDepth) exceeded');
+    }
+
     if (types.containsKey(type)) {
       // Sub-struct
       if (val is! Map<String, dynamic>) {
         throw ArgumentError('Expected Map for struct type $type, got ${val.runtimeType}');
       }
-      return hashStruct(primaryType: type, data: val, types: types);
+      return hashStruct(
+        primaryType: type,
+        data: val,
+        types: types,
+        depth: depth + 1,
+      );
     }
 
     if (type.endsWith(']')) {
-      // Array type
-      final itemType = type.substring(0, type.lastIndexOf('['));
-      final list = val as List;
-      final encodedItems = list.map((item) => _encodeField(itemType, item, types)).toList();
+      // Array type: T[] or T[K]
+      final openIdx = type.lastIndexOf('[');
+      if (openIdx <= 0) {
+        throw ArgumentError('Malformed EIP-712 array type: $type');
+      }
+      final itemType = type.substring(0, openIdx);
+      final lenStr = type.substring(openIdx + 1, type.length - 1);
+      if (val is! List) {
+        throw ArgumentError('Expected List for array type $type, got ${val.runtimeType}');
+      }
+      if (lenStr.isNotEmpty) {
+        final expectedLen = int.tryParse(lenStr);
+        if (expectedLen == null || expectedLen <= 0) {
+          throw ArgumentError('Invalid fixed array length in EIP-712 type: $type');
+        }
+        if (val.length != expectedLen) {
+          throw ArgumentError(
+            'EIP-712 fixed array length mismatch for $type: expected $expectedLen, got ${val.length}',
+          );
+        }
+      }
+      final encodedItems = val
+          .map((item) => _encodeField(itemType, item, types, depth + 1))
+          .toList();
       return Keccak256.hash(concatBytes(encodedItems));
     }
 
     if (type == 'string') {
-      final str = val as String? ?? '';
-      return Keccak256.hash(utf8.encode(str));
+      if (val is! String) {
+        throw ArgumentError('Expected String for EIP-712 string, got ${val.runtimeType}');
+      }
+      return Keccak256.hash(utf8.encode(val));
     }
 
     if (type == 'bytes') {
-      final bytes = val is List<int>
-          ? Uint8List.fromList(val)
-          : hexDecode(val as String? ?? '');
+      final Uint8List bytes;
+      if (val is List<int>) {
+        bytes = Uint8List.fromList(val);
+      } else if (val is String) {
+        bytes = hexDecode(val);
+      } else {
+        throw ArgumentError('Expected hex String or bytes for EIP-712 bytes, got ${val.runtimeType}');
+      }
       return Keccak256.hash(bytes);
     }
 
     if (type == 'bool') {
-      final b = val == true;
-      return _bigIntTo32(b ? BigInt.one : BigInt.zero);
+      if (val is! bool) {
+        throw ArgumentError('Expected bool for EIP-712 bool, got ${val.runtimeType}');
+      }
+      return _bigIntTo32(val ? BigInt.one : BigInt.zero);
     }
 
     if (type == 'address') {
-      final addrHex = val as String? ?? '';
-      final rawBytes = hexDecode(addrHex);
+      if (val is! String || !Eip55.isValidAddress(val)) {
+        throw ArgumentError('Invalid EIP-712 address: $val');
+      }
+      final rawBytes = hexDecode(val);
+      if (rawBytes.length != 20) {
+        throw ArgumentError('EIP-712 address must decode to 20 bytes');
+      }
       final padded = Uint8List(32);
       padded.setRange(32 - rawBytes.length, 32, rawBytes);
       return padded;
     }
 
     if (type.startsWith('uint') || type.startsWith('int')) {
-      BigInt numVal;
+      final match = _intTypeRegex.firstMatch(type);
+      if (match == null) {
+        throw ArgumentError('Invalid EIP-712 integer type: $type');
+      }
+      final isUnsigned = match.group(1) == 'u';
+      final bits = int.parse(match.group(2)!);
+      if (bits < 8 || bits > 256 || bits % 8 != 0) {
+        throw ArgumentError('Unsupported EIP-712 integer bit-width: $type');
+      }
+
+      final BigInt numVal;
       if (val is BigInt) {
         numVal = val;
       } else if (val is int) {
         numVal = BigInt.from(val);
       } else if (val is String) {
-        if (val.startsWith('0x') || val.startsWith('0X')) {
-          numVal = BigInt.parse(val.substring(2), radix: 16);
+        final trimmed = val.trim();
+        if (trimmed.isEmpty) {
+          throw ArgumentError('Empty string for EIP-712 $type');
+        }
+        if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+          numVal = BigInt.parse(trimmed.substring(2), radix: 16);
         } else {
-          numVal = BigInt.parse(val);
+          numVal = BigInt.parse(trimmed);
         }
       } else {
-        numVal = BigInt.zero;
+        throw ArgumentError('Expected integer value for EIP-712 $type, got ${val.runtimeType}');
+      }
+
+      if (isUnsigned) {
+        final maxVal = (BigInt.one << bits) - BigInt.one;
+        if (numVal < BigInt.zero || numVal > maxVal) {
+          throw ArgumentError('Value $numVal out of range for EIP-712 $type');
+        }
+      } else {
+        final minVal = -(BigInt.one << (bits - 1));
+        final maxVal = (BigInt.one << (bits - 1)) - BigInt.one;
+        if (numVal < minVal || numVal > maxVal) {
+          throw ArgumentError('Value $numVal out of range for EIP-712 $type');
+        }
       }
       return _bigIntTo32(numVal);
     }
 
     if (type.startsWith('bytes')) {
       // Fixed-length bytes (bytes1..bytes32)
-      final bytes = val is List<int>
-          ? Uint8List.fromList(val)
-          : hexDecode(val as String? ?? '');
+      final byteLen = int.tryParse(type.substring(5));
+      if (byteLen == null || byteLen < 1 || byteLen > 32) {
+        throw ArgumentError('Unsupported EIP-712 fixed bytes type: $type');
+      }
+      final Uint8List bytes;
+      if (val is List<int>) {
+        bytes = Uint8List.fromList(val);
+      } else if (val is String) {
+        bytes = hexDecode(val);
+      } else {
+        throw ArgumentError('Expected hex String or bytes for EIP-712 $type, got ${val.runtimeType}');
+      }
+      if (bytes.length != byteLen) {
+        throw ArgumentError(
+          'EIP-712 $type length mismatch: expected $byteLen bytes, got ${bytes.length}',
+        );
+      }
       final padded = Uint8List(32);
       padded.setRange(0, bytes.length, bytes);
       return padded;

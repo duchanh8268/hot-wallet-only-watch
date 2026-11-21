@@ -53,5 +53,27 @@ void main() {
       master.dispose();
       account.dispose();
     });
+
+    test('AUDIT-20: Secp256k1.verify rejects malleable high-S signatures', () {
+      const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+      final seed = Bip39.mnemonicToSeed(mnemonic);
+      final master = EvmHdKey.fromSeed(seed);
+      final account = master.deriveEvmAccount(accountIndex: 0, addressIndex: 0);
+
+      final messageHash = keccak256(hexDecode('deadbeef'));
+      final sig = Secp256k1.sign(messageHash, account.privateKey);
+      expect(Secp256k1.verify(messageHash, sig.r, sig.s, account.publicKey64), isTrue);
+
+      // Compute high-S counterpart: n - s
+      final sVal = BigInt.parse(hexEncode(sig.s), radix: 16);
+      final highS = Secp256k1.n - sVal;
+      final highSHex = highS.toRadixString(16).padLeft(64, '0');
+      final highSBytes = hexDecode(highSHex);
+
+      expect(Secp256k1.verify(messageHash, sig.r, highSBytes, account.publicKey64), isFalse);
+
+      master.dispose();
+      account.dispose();
+    });
   });
 }

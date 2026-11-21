@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:cardano_core/cardano_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hot_wallet_web/chains/evm/evm_hot_plugin.dart';
+import 'package:hot_wallet_web/chains/solana/solana_hot_plugin.dart';
 import 'package:hot_wallet_web/screens/dashboard_screen.dart';
 import 'package:hot_wallet_web/screens/settings_screen.dart';
 import 'package:hot_wallet_web/services/hot_app_state.dart';
@@ -143,6 +145,51 @@ void main() {
       await state.restoreStorageSnapshot();
       expect(state.allProfiles.length, equals(1));
       expect(state.allProfiles.first.name, equals('Primary Vault'));
+    });
+
+    test('HotAppState upgrades obsolete ETH/SOL mainnet RPC defaults while keeping user custom RPCs', () async {
+      final storage = InMemoryWebCryptoStorage();
+      await storage.saveEncrypted(
+        'hot_wallet_config_v1',
+        jsonEncode({
+          'schemaVersion': 1,
+          'customRpcEndpoints': {
+            'eth_mainnet': 'https://cloudflare-eth.com/',
+            'sol_mainnet-beta': 'https://api.mainnet-beta.solana.com',
+            'eth_sepolia': 'https://my-custom-sepolia.example/v3/abc',
+          },
+        }),
+      );
+
+      final state = HotAppState(storage: storage);
+      await state.init();
+
+      expect(state.customRpcEndpoints.containsKey('eth_mainnet'), isFalse);
+      expect(state.customRpcEndpoints.containsKey('sol_mainnet-beta'), isFalse);
+      expect(
+        state.customRpcEndpoints['eth_sepolia'],
+        equals('https://my-custom-sepolia.example/v3/abc'),
+      );
+      expect(
+        EvmHotPlugin.ethereum.rpcService.getRpcUrl('mainnet'),
+        equals('https://ethereum-rpc.publicnode.com'),
+      );
+      expect(
+        SolanaHotPlugin.instance.rpcService.getRpcUrl('mainnet-beta'),
+        equals('https://solana-rpc.publicnode.com'),
+      );
+      expect(
+        EvmHotPlugin.ethereum.rpcService.getRpcUrl('sepolia'),
+        equals('https://my-custom-sepolia.example/v3/abc'),
+      );
+
+      // Verify upgraded state was persisted back to storage
+      final persisted = jsonDecode((await storage.loadEncrypted('hot_wallet_config_v1'))!)
+          as Map<String, dynamic>;
+      final persistedRpcs = persisted['customRpcEndpoints'] as Map<String, dynamic>;
+      expect(persistedRpcs.containsKey('eth_mainnet'), isFalse);
+      expect(persistedRpcs.containsKey('sol_mainnet-beta'), isFalse);
+      expect(persistedRpcs['eth_sepolia'], equals('https://my-custom-sepolia.example/v3/abc'));
     });
   });
 

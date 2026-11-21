@@ -1,0 +1,18 @@
+name: sui_core
+description: Pure Dart cryptographic, SLIP-0010, BCS (Binary Canonical Serialization), PTB, SEC-01 security audit, and BC-UR library for Sui Air-Gapped Wallets.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  chain_core_interface:
+    path: ../chain_core_interface
+  crypto: ^3.0.6
+  pointycastle: ^3.9.1
+  typed_data: ^1.4.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
