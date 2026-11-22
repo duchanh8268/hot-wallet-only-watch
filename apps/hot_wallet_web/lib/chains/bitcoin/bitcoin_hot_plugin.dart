@@ -185,6 +185,7 @@ class BitcoinHotPlugin implements IHotChainPlugin {
         accountIndex: oldIn.accountIndex,
         change: oldIn.change,
         addressIndex: oldIn.addressIndex,
+        nonWitnessUtxo: oldIn.nonWitnessUtxo,
         witness: wit,
       ));
     }

@@ -115,4 +115,171 @@ class BtcSerializer {
       v >>= 8;
     }
   }
+
+  /// Parses raw legacy or SegWit Bitcoin transaction bytes and extracts outputs plus canonical txid.
+  static ({int version, List<BtcTxOut> outputs, int lockTime, String txid})
+      parseRawTransaction(Uint8List rawBytes) {
+    var offset = 0;
+
+    void requireBytes(int count) {
+      if (count < 0 || offset + count > rawBytes.length) {
+        throw const FormatException('Truncated raw Bitcoin transaction');
+      }
+    }
+
+    int readUint32Le() {
+      requireBytes(4);
+      final val = rawBytes[offset] |
+          (rawBytes[offset + 1] << 8) |
+          (rawBytes[offset + 2] << 16) |
+          (rawBytes[offset + 3] << 24);
+      offset += 4;
+      return val;
+    }
+
+    BigInt readUint64Le() {
+      requireBytes(8);
+      var val = BigInt.zero;
+      for (var i = 0; i < 8; i++) {
+        val |= BigInt.from(rawBytes[offset + i]) << (8 * i);
+      }
+      offset += 8;
+      return val;
+    }
+
+    ({int value, int startOffset, int endOffset}) readVarInt() {
+      final start = offset;
+      requireBytes(1);
+      final first = rawBytes[offset++];
+      int val;
+      if (first < 0xfd) {
+        val = first;
+      } else if (first == 0xfd) {
+        requireBytes(2);
+        val = rawBytes[offset] | (rawBytes[offset + 1] << 8);
+        offset += 2;
+        if (val < 0xfd) {
+          throw const FormatException('Non-canonical Bitcoin VarInt');
+        }
+      } else if (first == 0xfe) {
+        requireBytes(4);
+        val = rawBytes[offset] |
+            (rawBytes[offset + 1] << 8) |
+            (rawBytes[offset + 2] << 16) |
+            (rawBytes[offset + 3] << 24);
+        offset += 4;
+        if (val <= 0xffff) {
+          throw const FormatException('Non-canonical Bitcoin VarInt');
+        }
+      } else {
+        requireBytes(8);
+        var big = BigInt.zero;
+        for (var i = 0; i < 8; i++) {
+          big |= BigInt.from(rawBytes[offset + i]) << (8 * i);
+        }
+        offset += 8;
+        if (big <= BigInt.from(0xffffffff) || big > BigInt.from(0x7fffffff)) {
+          throw const FormatException('Out-of-range or non-canonical Bitcoin VarInt');
+        }
+        val = big.toInt();
+      }
+      return (value: val, startOffset: start, endOffset: offset);
+    }
+
+    final nonWitnessBb = BytesBuilder();
+
+    final version = readUint32Le();
+    nonWitnessBb.add(rawBytes.sublist(0, 4));
+
+    // Check optional BIP-144 SegWit marker (0x00) + flag (0x01)
+    var hasWitness = false;
+    if (offset + 1 < rawBytes.length &&
+        rawBytes[offset] == 0x00 &&
+        rawBytes[offset + 1] == 0x01) {
+      hasWitness = true;
+      offset += 2;
+    }
+
+    final inCountInfo = readVarInt();
+    final inCount = inCountInfo.value;
+    if (inCount <= 0 || inCount > 100000) {
+      throw FormatException('Invalid input count in raw transaction: $inCount');
+    }
+    nonWitnessBb.add(rawBytes.sublist(inCountInfo.startOffset, inCountInfo.endOffset));
+
+    for (var i = 0; i < inCount; i++) {
+      final inpStart = offset;
+      requireBytes(36); // prevout hash (32) + vout (4)
+      offset += 36;
+      final scriptLen = readVarInt().value;
+      if (scriptLen > 100000) {
+        throw FormatException('Oversized scriptSig in raw transaction: $scriptLen');
+      }
+      requireBytes(scriptLen);
+      offset += scriptLen;
+      requireBytes(4); // sequence
+      offset += 4;
+      nonWitnessBb.add(rawBytes.sublist(inpStart, offset));
+    }
+
+    final outCountInfo = readVarInt();
+    final outCount = outCountInfo.value;
+    if (outCount <= 0 || outCount > 100000) {
+      throw FormatException('Invalid output count in raw transaction: $outCount');
+    }
+    nonWitnessBb.add(rawBytes.sublist(outCountInfo.startOffset, outCountInfo.endOffset));
+
+    final outputs = <BtcTxOut>[];
+    for (var o = 0; o < outCount; o++) {
+      final outStart = offset;
+      final valueSat = readUint64Le();
+      final spkLen = readVarInt().value;
+      if (spkLen > 100000) {
+        throw FormatException('Oversized scriptPubKey in raw transaction: $spkLen');
+      }
+      requireBytes(spkLen);
+      final spk = Uint8List.fromList(rawBytes.sublist(offset, offset + spkLen));
+      offset += spkLen;
+      nonWitnessBb.add(rawBytes.sublist(outStart, offset));
+      outputs.add(BtcTxOut(valueSat: valueSat, scriptPubKey: spk));
+    }
+
+    if (hasWitness) {
+      for (var i = 0; i < inCount; i++) {
+        final itemCount = readVarInt().value;
+        if (itemCount > 10000) {
+          throw FormatException('Oversized witness stack in raw transaction: $itemCount');
+        }
+        for (var w = 0; w < itemCount; w++) {
+          final itemLen = readVarInt().value;
+          if (itemLen > 1000000) {
+            throw FormatException('Oversized witness item in raw transaction: $itemLen');
+          }
+          requireBytes(itemLen);
+          offset += itemLen;
+        }
+      }
+    }
+
+    final lockStart = offset;
+    final lockTime = readUint32Le();
+    nonWitnessBb.add(rawBytes.sublist(lockStart, offset));
+
+    if (offset != rawBytes.length) {
+      throw const FormatException('Trailing bytes after raw Bitcoin transaction');
+    }
+
+    final rawHash = hash256(nonWitnessBb.toBytes());
+    final reversed = Uint8List(32);
+    for (var i = 0; i < 32; i++) {
+      reversed[i] = rawHash[31 - i];
+    }
+
+    return (
+      version: version,
+      outputs: outputs,
+      lockTime: lockTime,
+      txid: hexEncode(reversed),
+    );
+  }
 }

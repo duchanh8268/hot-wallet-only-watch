@@ -5,6 +5,7 @@ import '../bc_ur/btc_ur_messages.dart';
 import '../crypto/btc_hd_key.dart';
 import '../crypto/secp256k1_btc.dart';
 import '../transaction/btc_models.dart';
+import '../transaction/btc_serializer.dart';
 import '../transaction/sighash_bip143.dart';
 
 /// Offline SEC-01 Security Audit Guard & Signer for Bitcoin Native SegWit transactions.
@@ -51,27 +52,62 @@ class BtcSec01Guard {
         return AuditVerdict.rejected('Giao dịch không có đầu ra (outputs empty)');
       }
 
-      // 1. Verify Input Ownership & Prevent Duplicate / Malformed OutPoints
+      // 1. Verify Input UTXO (nonWitnessUtxo + OutPoint + PrevOut Value & ScriptPubKey Ownership)
       var totalInputSat = BigInt.zero;
       final seenOutpoints = <String>{};
       for (var i = 0; i < tx.inputs.length; i++) {
         final inp = tx.inputs[i];
+        final Uint8List outpointBytes;
         try {
-          inp.previousOutput.toBytes();
+          outpointBytes = inp.previousOutput.toBytes();
         } catch (e) {
           return AuditVerdict.rejected('UTXO đầu vào #$i có OutPoint không hợp lệ: $e');
         }
-        final outpointKey = '${inp.previousOutput.txid.toLowerCase()}:${inp.previousOutput.vout}';
+        final canonicalOutpoint = OutPoint.fromBytes(outpointBytes);
+        final outpointKey = '${canonicalOutpoint.txid.toLowerCase()}:${canonicalOutpoint.vout}';
         if (!seenOutpoints.add(outpointKey)) {
           return AuditVerdict.rejected('Phát hiện UTXO đầu vào bị trùng lặp tại Input #$i ($outpointKey)');
         }
         if (inp.scriptSig.isNotEmpty) {
           return AuditVerdict.rejected('Native SegWit Input #$i không được chứa scriptSig khác rỗng');
         }
-        if (inp.amountSat == null || inp.amountSat! <= BigInt.zero || inp.amountSat! > _maxMoneySat) {
-          return AuditVerdict.rejected('UTXO đầu vào #$i thiếu hoặc sai giá trị satoshi');
+
+        // Require and verify full previous transaction (nonWitnessUtxo) to prevent BIP-143 amount spoofing
+        final prevRaw = inp.nonWitnessUtxo;
+        if (prevRaw == null || prevRaw.isEmpty) {
+          return AuditVerdict.rejected(
+            'UTXO đầu vào #$i thiếu dữ liệu giao dịch trước (nonWitnessUtxo) để xác thực giá trị BIP-143',
+          );
         }
-        totalInputSat += inp.amountSat!;
+        final ({int version, List<BtcTxOut> outputs, int lockTime, String txid}) prevTx;
+        try {
+          prevTx = BtcSerializer.parseRawTransaction(prevRaw);
+        } catch (e) {
+          return AuditVerdict.rejected('UTXO đầu vào #$i có nonWitnessUtxo không hợp lệ: $e');
+        }
+        if (prevTx.txid.toLowerCase() != canonicalOutpoint.txid.toLowerCase()) {
+          return AuditVerdict.rejected(
+            'CẢNH BÁO AN NINH: Hash của nonWitnessUtxo (${prevTx.txid}) không khớp với TxID đầu vào #$i (${canonicalOutpoint.txid})',
+          );
+        }
+        if (canonicalOutpoint.vout < 0 || canonicalOutpoint.vout >= prevTx.outputs.length) {
+          return AuditVerdict.rejected(
+            'UTXO đầu vào #$i có vout=${canonicalOutpoint.vout} vượt quá số đầu ra của nonWitnessUtxo (${prevTx.outputs.length})',
+          );
+        }
+
+        final verifiedPrevOut = prevTx.outputs[canonicalOutpoint.vout];
+        final verifiedSat = verifiedPrevOut.valueSat;
+        if (verifiedSat <= BigInt.zero || verifiedSat > _maxMoneySat) {
+          return AuditVerdict.rejected('UTXO đầu vào #$i có giá trị satoshi thực tế không hợp lệ ($verifiedSat)');
+        }
+        if (inp.amountSat != null && inp.amountSat! != verifiedSat) {
+          return AuditVerdict.rejected(
+            'CẢNH BÁO AN NINH BIP-143: Giá trị khai báo (${inp.amountSat} sats) ở UTXO #$i '
+            'không khớp với giao dịch gốc ($verifiedSat sats)!',
+          );
+        }
+        totalInputSat += verifiedSat;
 
         final acctIdx = inp.accountIndex ?? request.accountIndex;
         if (acctIdx != expectedAccountIndex) {
@@ -95,7 +131,22 @@ class BtcSec01Guard {
           addressIndex: addrIdx,
           isTestnet: isTestnet,
         );
-        derived.dispose();
+        try {
+          final expectedScript = Uint8List(22);
+          expectedScript[0] = 0x00;
+          expectedScript[1] = 0x14;
+          expectedScript.setRange(2, 22, derived.pubKeyHash);
+
+          if (verifiedPrevOut.scriptPubKey.length != 22 ||
+              !constantTimeEquals(verifiedPrevOut.scriptPubKey, expectedScript)) {
+            return AuditVerdict.rejected(
+              'CẢNH BÁO AN NINH: ScriptPubKey của UTXO #$i không thuộc địa chỉ '
+              'm/84\'/${isTestnet ? 1 : 0}\'/$acctIdx\'/$change/$addrIdx của ví này!',
+            );
+          }
+        } finally {
+          derived.dispose();
+        }
       }
 
       // 2. Classify Outputs & Strict Change Address Verification
@@ -263,6 +314,8 @@ class BtcSec01Guard {
 
       for (var i = 0; i < tx.inputs.length; i++) {
         final inp = tx.inputs[i];
+        final verifiedPrevTx = BtcSerializer.parseRawTransaction(inp.nonWitnessUtxo!);
+        final verifiedAmountSat = verifiedPrevTx.outputs[inp.previousOutput.vout].valueSat;
         final acctIdx = inp.accountIndex ?? request.accountIndex;
         final change = inp.change ?? 0;
         final addrIdx = inp.addressIndex ?? 0;
@@ -273,28 +326,29 @@ class BtcSec01Guard {
           addressIndex: addrIdx,
           isTestnet: isTestnet,
         );
+        try {
+          final pubKeyCompressed = key.publicKeyCompressed;
+          final pubKeyHash = key.pubKeyHash;
 
-        final pubKeyCompressed = key.publicKeyCompressed;
-        final pubKeyHash = key.pubKeyHash;
+          final sighash = Bip143Sighash.computeP2wpkhSighash(
+            tx: tx,
+            inputIndex: i,
+            pubKeyHash20: pubKeyHash,
+            amountSat: verifiedAmountSat,
+            sighashType: Bip143Sighash.sighashAll,
+          );
 
-        final sighash = Bip143Sighash.computeP2wpkhSighash(
-          tx: tx,
-          inputIndex: i,
-          pubKeyHash20: pubKeyHash,
-          amountSat: inp.amountSat!,
-          sighashType: Bip143Sighash.sighashAll,
-        );
+          final sigDer = Secp256k1Btc.signDer(
+            sighash,
+            key.privateKey,
+            sighashType: Bip143Sighash.sighashAll,
+          );
 
-        final sigDer = Secp256k1Btc.signDer(
-          sighash,
-          key.privateKey,
-          sighashType: Bip143Sighash.sighashAll,
-        );
-
-        key.dispose();
-
-        // SegWit P2WPKH witness stack: [ <signature+sighash_type>, <compressed_pubkey> ]
-        witnesses.add(BtcWitness([sigDer, pubKeyCompressed]));
+          // SegWit P2WPKH witness stack: [ <signature+sighash_type>, <compressed_pubkey> ]
+          witnesses.add(BtcWitness([sigDer, pubKeyCompressed]));
+        } finally {
+          key.dispose();
+        }
       }
 
       return BtcSignResponseUr(

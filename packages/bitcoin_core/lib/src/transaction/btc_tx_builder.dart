@@ -10,6 +10,7 @@ class BtcUtxo {
   final int change; // 0 for external receive, 1 for internal change
   final int addressIndex;
   final Uint8List? pubKeyHash;
+  final Uint8List? nonWitnessUtxo;
 
   const BtcUtxo({
     required this.outpoint,
@@ -18,6 +19,7 @@ class BtcUtxo {
     required this.change,
     required this.addressIndex,
     this.pubKeyHash,
+    this.nonWitnessUtxo,
   });
 
   Map<String, dynamic> toJson() => {
@@ -116,6 +118,7 @@ class BtcTxBuilder {
               accountIndex: u.accountIndex,
               change: u.change,
               addressIndex: u.addressIndex,
+              nonWitnessUtxo: u.nonWitnessUtxo,
             ),
           )
           .toList();
@@ -189,6 +192,7 @@ class BtcTxBuilder {
             accountIndex: u.accountIndex,
             change: u.change,
             addressIndex: u.addressIndex,
+            nonWitnessUtxo: u.nonWitnessUtxo,
           ),
         )
         .toList();

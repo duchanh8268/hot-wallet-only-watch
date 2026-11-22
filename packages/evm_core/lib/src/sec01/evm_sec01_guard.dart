@@ -26,6 +26,7 @@ class EvmSec01Guard {
     required int expectedAccountIndex,
     required int expectedAddressIndex,
     String? expectedNetwork,
+    String? expectedChain,
   }) {
     if (request.accountIndex != expectedAccountIndex ||
         request.addressIndex != expectedAddressIndex) {
@@ -35,8 +36,23 @@ class EvmSec01Guard {
       );
     }
 
-    if (expectedNetwork != null &&
-        request.network.trim().toLowerCase() != expectedNetwork.trim().toLowerCase()) {
+    final normalizedChain = request.chain.trim().toLowerCase();
+    final normalizedNetwork = request.network.trim().toLowerCase();
+
+    if (normalizedChain != 'ethereum' && normalizedChain != 'hyperliquid') {
+      return AuditVerdict.rejected(
+        'Chuỗi EVM không được hỗ trợ hoặc không hợp lệ: "${request.chain}"',
+      );
+    }
+
+    if (expectedChain != null && normalizedChain != expectedChain.trim().toLowerCase()) {
+      return AuditVerdict.rejected(
+        'Xung đột chuỗi (Chain Mismatch): Yêu cầu ký thuộc "$normalizedChain" '
+        'nhưng Ví Lạnh đang chọn "${expectedChain.trim().toLowerCase()}".',
+      );
+    }
+
+    if (expectedNetwork != null && normalizedNetwork != expectedNetwork.trim().toLowerCase()) {
       return AuditVerdict.rejected(
         'Xung đột mạng lưới (Network Mismatch): Yêu cầu ký thuộc mạng "${request.network}" '
         'nhưng Ví Lạnh đang đặt ở mạng "$expectedNetwork".',
@@ -54,11 +70,11 @@ class EvmSec01Guard {
 
     try {
       if (request.payloadType == EthPayloadType.eip1559) {
-        return _auditEip1559(request, myAddress);
+        return _auditEip1559(request, myAddress, normalizedChain, normalizedNetwork);
       } else if (request.payloadType == EthPayloadType.legacy) {
-        return _auditLegacy(request, myAddress);
+        return _auditLegacy(request, myAddress, normalizedChain, normalizedNetwork);
       } else if (request.payloadType == EthPayloadType.eip712) {
-        return _auditEip712(request, myAddress);
+        return _auditEip712(request, myAddress, normalizedChain, normalizedNetwork);
       } else {
         return AuditVerdict.rejected('Unsupported payload type: ${request.payloadType}');
       }
@@ -69,12 +85,19 @@ class EvmSec01Guard {
     }
   }
 
-  static AuditVerdict _auditEip1559(EthSignRequestUr request, String myAddress) {
+  static AuditVerdict _auditEip1559(
+    EthSignRequestUr request,
+    String myAddress,
+    String normalizedChain,
+    String normalizedNetwork,
+  ) {
     try {
       final tx = EvmTxSerializer.deserializeEip1559Unsigned(request.rawPayload);
       return _auditDecodedTransaction(
         request: request,
         myAddress: myAddress,
+        normalizedChain: normalizedChain,
+        normalizedNetwork: normalizedNetwork,
         chainId: tx.chainId,
         nonce: tx.nonce,
         maxFeePerGas: tx.maxFeePerGas,
@@ -90,12 +113,19 @@ class EvmSec01Guard {
     }
   }
 
-  static AuditVerdict _auditLegacy(EthSignRequestUr request, String myAddress) {
+  static AuditVerdict _auditLegacy(
+    EthSignRequestUr request,
+    String myAddress,
+    String normalizedChain,
+    String normalizedNetwork,
+  ) {
     try {
       final tx = EvmTxSerializer.deserializeLegacyUnsigned(request.rawPayload);
       return _auditDecodedTransaction(
         request: request,
         myAddress: myAddress,
+        normalizedChain: normalizedChain,
+        normalizedNetwork: normalizedNetwork,
         chainId: tx.chainId,
         nonce: tx.nonce,
         maxFeePerGas: tx.gasPrice,
@@ -114,6 +144,8 @@ class EvmSec01Guard {
   static AuditVerdict _auditDecodedTransaction({
     required EthSignRequestUr request,
     required String myAddress,
+    required String normalizedChain,
+    required String normalizedNetwork,
     required int chainId,
     required BigInt nonce,
     required BigInt maxFeePerGas,
@@ -124,14 +156,16 @@ class EvmSec01Guard {
     required Uint8List data,
     required bool isLegacyPreEip155,
   }) {
-    final expectedChainId = _ethereumNetworkChainIds[request.network.toLowerCase()];
-    if (request.chain.toLowerCase() == 'ethereum' &&
-        expectedChainId != null &&
-        chainId != expectedChainId &&
-        !isLegacyPreEip155) {
-      return AuditVerdict.rejected(
-        'Chain ID trong RLP ($chainId) không khớp với mạng ${request.network} (Chain ID $expectedChainId)',
-      );
+    final expectedChainId = _ethereumNetworkChainIds[normalizedNetwork];
+    if (normalizedChain == 'ethereum') {
+      if (expectedChainId == null) {
+        return AuditVerdict.rejected('Mạng Ethereum không được hỗ trợ: "${request.network}"');
+      }
+      if (chainId != expectedChainId && !isLegacyPreEip155) {
+        return AuditVerdict.rejected(
+          'Chain ID trong RLP ($chainId) không khớp với mạng $normalizedNetwork (Chain ID $expectedChainId)',
+        );
+      }
     }
 
     // Cross-check untrusted metadata against decoded RLP bytes if metadata fields are present
@@ -194,12 +228,12 @@ class EvmSec01Guard {
       return AuditVerdict.rejected('Địa chỉ người nhận không hợp lệ: $to');
     }
 
-    // Inspect decoded calldata from RLP payload
+    // Inspect decoded calldata from RLP payload (only decode ERC-20 ABI when interacting with an existing contract)
     if (data.isNotEmpty) {
       if (to.isNotEmpty) {
         extraDetails['Contract / Target'] = to;
       }
-      if (data.length >= 4) {
+      if (to.isNotEmpty && data.length >= 4) {
         final selector = hexEncode(data.sublist(0, 4), prefix0x: true);
         if (selector == '0xa9059cbb' &&
             data.length == 68 &&
@@ -211,8 +245,10 @@ class EvmSec01Guard {
           extraDetails['Token Contract'] = to;
           extraDetails['Raw Token Units'] = rawTokenAmount.toString();
 
-          final tokenSymbol = meta['tokenSymbol'] as String?;
-          final tokenDecimals = meta['tokenDecimals'] as int?;
+          final rawSymbol = meta['tokenSymbol'];
+          final rawDecimals = meta['tokenDecimals'];
+          final tokenSymbol = rawSymbol is String ? rawSymbol : null;
+          final tokenDecimals = rawDecimals is int ? rawDecimals : null;
           if (tokenSymbol != null && tokenDecimals != null && tokenDecimals >= 0 && tokenDecimals <= 36) {
             final tokenDisplay = '${_formatTokenUnits(rawTokenAmount, tokenDecimals)} $tokenSymbol (chưa xác thực on-chain)';
             amountDisplay = valueWei > BigInt.zero
@@ -224,6 +260,7 @@ class EvmSec01Guard {
                 : '$rawTokenAmount raw token units (ERC-20)';
           }
           if (valueWei > BigInt.zero) {
+            extraDetails['Native ETH Attached'] = '${_formatWei(valueWei)} ETH';
             warnings.add('LƯU Ý: Giao dịch gọi chuyển ERC-20 đồng thời gửi kèm ${_formatWei(valueWei)} ETH!');
           }
         } else if (selector == '0x095ea7b3' &&
@@ -238,9 +275,19 @@ class EvmSec01Guard {
           extraDetails['Spender'] = spender;
           final isUnlimited = allowance >= (BigInt.one << 255);
           extraDetails['Allowance'] = isUnlimited ? 'UNLIMITED (MAX_UINT256)' : allowance.toString();
-          amountDisplay = isUnlimited
+          final baseApproveDisplay = isUnlimited
               ? 'Cấp quyền VÔ HẠN Token (Approve)'
               : 'Cấp quyền $allowance raw units (Approve)';
+          if (valueWei > BigInt.zero) {
+            final ethDisplay = '${_formatWei(valueWei)} ETH';
+            amountDisplay = '$baseApproveDisplay + $ethDisplay';
+            extraDetails['Native ETH Attached'] = ethDisplay;
+            warnings.add(
+              'CẢNH BÁO NGHIÊM TRỌNG: Giao dịch ERC-20 Approve đính kèm $ethDisplay gửi tới hợp đồng $to!',
+            );
+          } else {
+            amountDisplay = baseApproveDisplay;
+          }
           warnings.add(
             isUnlimited
                 ? 'CẢNH BÁO NGUY HIỂM: Cấp quyền chi tiêu Token VÔ HẠN cho $spender!'
@@ -265,42 +312,108 @@ class EvmSec01Guard {
       recipientAddress: recipient,
       amountDisplay: amountDisplay,
       feeDisplay: '$maxCostEth ETH (Max Gas)',
-      networkDisplay: '${request.chain.toUpperCase()} (Chain ID: $chainId)',
+      networkDisplay: '${normalizedChain.toUpperCase()} (Chain ID: $chainId)',
       isHighRiskContractCall: isContract,
       warnings: warnings,
       extraDetails: extraDetails,
     );
   }
 
-  static AuditVerdict _auditEip712(EthSignRequestUr request, String myAddress) {
+  static AuditVerdict _auditEip712(
+    EthSignRequestUr request,
+    String myAddress,
+    String normalizedChain,
+    String normalizedNetwork,
+  ) {
     try {
       final jsonStr = utf8.decode(request.rawPayload);
-      final typedData = Eip712TypedData.fromJsonString(jsonStr);
+      final rawJson = jsonDecode(jsonStr);
+      if (rawJson is! Map<String, dynamic>) {
+        return AuditVerdict.rejected('EIP-712 payload JSON must be an object');
+      }
+      final typedData = Eip712TypedData.fromJson(rawJson);
       // Validate hashability of typed data before approval
       Eip712Hasher.hashTypedData(typedData);
 
       final primaryType = typedData.primaryType;
+      final primaryProps = typedData.types[primaryType];
+      if (primaryProps == null) {
+        return AuditVerdict.rejected('EIP-712 types thiếu định nghĩa cho $primaryType');
+      }
+
+      // Compute exact hashed domain field names matching Eip712Hasher.hashDomain
+      final domainMap = typedData.domain.toMap();
+      final domainTypes = typedData.types['EIP712Domain'];
+      final hashedDomainNames = domainTypes != null
+          ? domainTypes.map((p) => p.name).toSet()
+          : domainMap.keys.toSet();
+
+      final rawDomainObj = rawJson['domain'];
+      if (rawDomainObj is Map<String, dynamic>) {
+        for (final key in rawDomainObj.keys) {
+          if (rawDomainObj[key] != null && !hashedDomainNames.contains(key)) {
+            return AuditVerdict.rejected(
+              'EIP-712 Domain chứa trường ẩn "$key" không nằm trong EIP712Domain types!',
+            );
+          }
+        }
+      }
+      for (final key in domainMap.keys) {
+        if (!hashedDomainNames.contains(key)) {
+          return AuditVerdict.rejected(
+            'EIP-712 Domain chứa trường "$key" không được băm trong EIP712Domain types!',
+          );
+        }
+      }
+
+      // Reject any unhashed extra keys in message (and nested structs) omitted from types
+      final unhashedPath = _findUnhashedStructField(
+        primaryType,
+        typedData.message,
+        typedData.types,
+        primaryType,
+      );
+      if (unhashedPath != null) {
+        return AuditVerdict.rejected(
+          'EIP-712 Message chứa trường ẩn không được ký trong types: $unhashedPath',
+        );
+      }
+
       final message = typedData.message;
       final domain = typedData.domain;
+      final hashedMsgNames = primaryProps.map((p) => p.name).toSet();
 
       final warnings = <String>[];
       var isHighRisk = false;
       var recipient = 'N/A';
       var amountDisplay = 'N/A';
 
-      final isValidHlDomain = domain.name == 'Exchange' &&
+      final hasAllHlDomainTypes = domainTypes != null &&
+          hashedDomainNames.containsAll(const {'name', 'version', 'chainId', 'verifyingContract'}) &&
+          !hashedDomainNames.contains('salt');
+
+      final isValidHlDomain = hasAllHlDomainTypes &&
+          domain.salt == null &&
+          domain.name == 'Exchange' &&
           domain.version == '1' &&
           domain.chainId == 1337 &&
           (domain.verifyingContract?.toLowerCase() ==
               '0x0000000000000000000000000000000000000000');
 
-      final expectedHlChain = request.network.toLowerCase() == 'mainnet' ? 'Mainnet' : 'Testnet';
+      if (normalizedChain == 'hyperliquid' &&
+          normalizedNetwork != 'mainnet' &&
+          normalizedNetwork != 'testnet') {
+        return AuditVerdict.rejected('Mạng Hyperliquid không hợp lệ: "${request.network}"');
+      }
+
+      final expectedHlChain = normalizedNetwork == 'mainnet' ? 'Mainnet' : 'Testnet';
       final msgHlChain = message['hyperliquidChain']?.toString();
 
       if (isValidHlDomain && primaryType == 'HyperliquidTransaction:UsdSend') {
-        if (msgHlChain != expectedHlChain) {
+        if (!hashedMsgNames.containsAll(const {'hyperliquidChain', 'destination', 'amount'}) ||
+            msgHlChain != expectedHlChain) {
           return AuditVerdict.rejected(
-            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu (${request.network})',
+            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu ($normalizedNetwork)',
           );
         }
         recipient = message['destination'] as String? ?? '';
@@ -310,9 +423,10 @@ class EvmSec01Guard {
         final amount = message['amount'] as String? ?? '0';
         amountDisplay = '\$$amount USDC (Hyperliquid L1)';
       } else if (isValidHlDomain && primaryType == 'HyperliquidTransaction:SpotSend') {
-        if (msgHlChain != expectedHlChain) {
+        if (!hashedMsgNames.containsAll(const {'hyperliquidChain', 'destination', 'token', 'amount'}) ||
+            msgHlChain != expectedHlChain) {
           return AuditVerdict.rejected(
-            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu (${request.network})',
+            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu ($normalizedNetwork)',
           );
         }
         recipient = message['destination'] as String? ?? '';
@@ -323,9 +437,10 @@ class EvmSec01Guard {
         final amount = message['amount'] as String? ?? '0';
         amountDisplay = '$amount $token (Hyperliquid Spot)';
       } else if (isValidHlDomain && primaryType == 'HyperliquidTransaction:ApproveAgent') {
-        if (msgHlChain != expectedHlChain) {
+        if (!hashedMsgNames.containsAll(const {'hyperliquidChain', 'agentAddress'}) ||
+            msgHlChain != expectedHlChain) {
           return AuditVerdict.rejected(
-            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu (${request.network})',
+            'Hyperliquid chain ($msgHlChain) không khớp với mạng yêu cầu ($normalizedNetwork)',
           );
         }
         recipient = message['agentAddress'] as String? ?? '';
@@ -339,24 +454,27 @@ class EvmSec01Guard {
       } else {
         isHighRisk = true;
         warnings.add('CẢNH BÁO RỦI RO: Ký cấu trúc dữ liệu EIP-712 tùy chỉnh ($primaryType)');
-        if (message['spender'] != null) {
+        if (hashedMsgNames.contains('spender') && message['spender'] != null) {
           recipient = message['spender'].toString();
-        } else if (message['to'] != null) {
+        } else if (hashedMsgNames.contains('to') && message['to'] != null) {
           recipient = message['to'].toString();
-        } else if (message['destination'] != null) {
+        } else if (hashedMsgNames.contains('destination') && message['destination'] != null) {
           recipient = message['destination'].toString();
         }
       }
 
       final extraDetails = <String, String>{
         'From': myAddress,
-        'Domain Name': domain.name ?? 'N/A',
-        'Domain Chain ID': '${domain.chainId ?? 'N/A'}',
-        'Verifying Contract': domain.verifyingContract ?? 'N/A',
+        'Domain Name': hashedDomainNames.contains('name') ? (domain.name ?? 'N/A') : '(Không băm)',
+        'Domain Chain ID':
+            hashedDomainNames.contains('chainId') ? '${domain.chainId ?? 'N/A'}' : '(Không băm)',
+        'Verifying Contract': hashedDomainNames.contains('verifyingContract')
+            ? (domain.verifyingContract ?? 'N/A')
+            : '(Không băm)',
         'Primary Type': primaryType,
       };
-      for (final entry in message.entries) {
-        extraDetails['Msg.${entry.key}'] = entry.value.toString();
+      for (final prop in primaryProps) {
+        extraDetails['Msg.${prop.name}'] = '${message[prop.name]}';
       }
 
       return AuditVerdict(
@@ -364,7 +482,7 @@ class EvmSec01Guard {
         recipientAddress: recipient,
         amountDisplay: amountDisplay,
         feeDisplay: '0 Phí L1 (Off-chain Sign)',
-        networkDisplay: '${request.chain.toUpperCase()} (${request.network.toUpperCase()})',
+        networkDisplay: '${normalizedChain.toUpperCase()} (${normalizedNetwork.toUpperCase()})',
         isHighRiskContractCall: isHighRisk,
         warnings: warnings,
         extraDetails: extraDetails,
@@ -372,6 +490,42 @@ class EvmSec01Guard {
     } catch (e) {
       return AuditVerdict.rejected('Lỗi giải mã cấu trúc EIP-712: $e');
     }
+  }
+
+  static String? _findUnhashedStructField(
+    String typeName,
+    Map<String, dynamic> data,
+    Map<String, List<Eip712TypeProperty>> types,
+    String path, [
+    int depth = 0,
+  ]) {
+    if (depth > Eip712Hasher.maxDepth) return '$path (depth exceeded)';
+    final props = types[typeName];
+    if (props == null) return '$path (missing type $typeName)';
+    final propMap = {for (final p in props) p.name: p.type};
+    for (final key in data.keys) {
+      final propType = propMap[key];
+      if (propType == null) {
+        return '$path.$key';
+      }
+      final val = data[key];
+      if (types.containsKey(propType) && val is Map<String, dynamic>) {
+        final sub = _findUnhashedStructField(propType, val, types, '$path.$key', depth + 1);
+        if (sub != null) return sub;
+      } else if (propType.endsWith(']') && val is List) {
+        final baseType = propType.substring(0, propType.lastIndexOf('['));
+        if (types.containsKey(baseType)) {
+          for (var i = 0; i < val.length; i++) {
+            final item = val[i];
+            if (item is Map<String, dynamic>) {
+              final sub = _findUnhashedStructField(baseType, item, types, '$path.$key[$i]', depth + 1);
+              if (sub != null) return sub;
+            }
+          }
+        }
+      }
+    }
+    return null;
   }
 
   static bool _hasZeroAddressPadding(List<int> pad12) {

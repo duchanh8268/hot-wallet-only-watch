@@ -133,6 +133,13 @@ class Sec01Guard {
       );
     }
 
+    if (txBody.fee < BigInt.zero) {
+      throw const Sec01SecurityException(
+        Sec01ErrorCode.malformedTxBody,
+        'Transaction fee cannot be negative.',
+      );
+    }
+
     if (txBody.networkId != null &&
         txBody.networkId != expectedNetwork.networkTag) {
       throw Sec01SecurityException(
@@ -213,6 +220,13 @@ class Sec01Guard {
         throw Sec01SecurityException(
           Sec01ErrorCode.unauthorizedInputAddress,
           'UTXO input $id address does not match m/1852\'/1815\'/$accountIndex\'/${ctx.derivationRole}/${ctx.derivationIndex}',
+        );
+      }
+
+      if (ctx.lovelace < BigInt.zero) {
+        throw const Sec01SecurityException(
+          Sec01ErrorCode.malformedTxBody,
+          'UTXO input lovelace cannot be negative.',
         );
       }
 

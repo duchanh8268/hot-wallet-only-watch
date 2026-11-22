@@ -93,9 +93,9 @@ class SuiSec01Guard {
 
       final warnings = <String>[];
       var isHighRisk = false;
+      var gasCoinTaintedByMerge = false;
       var totalMist = BigInt.zero;
-      final splitFromGasCoinCmdIndices = <int>{};
-      final splitAmountsByCmd = <int, List<BigInt>>{};
+      final splitCmdInfos = <int, _SuiSplitInfo>{};
       final recipients = <String>[];
       final extraDetails = <String, String>{
         'Người gửi (Sender)': txData.v1.sender,
@@ -108,10 +108,22 @@ class SuiSec01Guard {
       for (var cmdIdx = 0; cmdIdx < ptb.commands.length; cmdIdx++) {
         final cmd = ptb.commands[cmdIdx];
         if (cmd is SuiSplitCoinsCommand) {
-          final isGasCoinSource = cmd.coin is SuiGasCoinArgument;
-          if (!isGasCoinSource) {
+          var isGasCoinSource = cmd.coin is SuiGasCoinArgument && !gasCoinTaintedByMerge;
+          if (cmd.coin is SuiResultArgument) {
+            final srcInfo = splitCmdInfos[(cmd.coin as SuiResultArgument).index];
+            if (srcInfo != null && srcInfo.isTaintedByMerge) {
+              isHighRisk = true;
+              warnings.add(
+                'Lệnh #$cmdIdx: SplitCoins tách từ kết quả đã qua MergeCoins (#${(cmd.coin as SuiResultArgument).index})',
+              );
+            }
+            isGasCoinSource = false;
+          } else if (cmd.coin is! SuiGasCoinArgument) {
             isHighRisk = true;
             warnings.add('Lệnh #$cmdIdx: SplitCoins từ một Coin/Object khác ngoài GasCoin');
+          } else if (gasCoinTaintedByMerge) {
+            isHighRisk = true;
+            warnings.add('Lệnh #$cmdIdx: SplitCoins từ GasCoin đã bị gộp thêm Object trước đó');
           }
           final cmdAmounts = <BigInt>[];
           for (final amtArg in cmd.amounts) {
@@ -128,20 +140,27 @@ class SuiSec01Guard {
                 'Lệnh SplitCoins #$cmdIdx yêu cầu tham số Pure u64 hợp lệ',
               );
             }
-            final reader = BcsReader(inArg.bytes);
-            final amt = reader.readU64();
-            if (reader.remaining != 0) {
+            final BigInt amt;
+            try {
+              final reader = BcsReader(inArg.bytes);
+              amt = reader.readU64();
+              if (reader.remaining != 0) {
+                return AuditVerdict.rejected(
+                  'Lệnh SplitCoins #$cmdIdx chứa byte dư thừa trong tham số u64',
+                );
+              }
+            } catch (e) {
               return AuditVerdict.rejected(
-                'Lệnh SplitCoins #$cmdIdx chứa byte dư thừa trong tham số u64',
+                'Lệnh SplitCoins #$cmdIdx có tham số u64 không hợp lệ: $e',
               );
             }
             totalMist += amt;
             cmdAmounts.add(amt);
           }
-          if (isGasCoinSource) {
-            splitFromGasCoinCmdIndices.add(cmdIdx);
-          }
-          splitAmountsByCmd[cmdIdx] = cmdAmounts;
+          splitCmdInfos[cmdIdx] = _SuiSplitInfo(
+            isFromGasCoin: isGasCoinSource,
+            amounts: cmdAmounts,
+          );
         } else if (cmd is SuiTransferObjectsCommand) {
           if (cmd.objects.isEmpty) {
             return AuditVerdict.rejected('Lệnh TransferObjects #$cmdIdx không có đối tượng nào');
@@ -164,11 +183,18 @@ class SuiSec01Guard {
               'Lệnh TransferObjects #$cmdIdx có Input người nhận không phải Pure Address',
             );
           }
-          final recReader = BcsReader(recInput.bytes);
-          final recAddr = recReader.readAddress();
-          if (recReader.remaining != 0) {
+          final String recAddr;
+          try {
+            final recReader = BcsReader(recInput.bytes);
+            recAddr = recReader.readAddress();
+            if (recReader.remaining != 0) {
+              return AuditVerdict.rejected(
+                'Lệnh TransferObjects #$cmdIdx có độ dài địa chỉ người nhận không hợp lệ',
+              );
+            }
+          } catch (e) {
             return AuditVerdict.rejected(
-              'Lệnh TransferObjects #$cmdIdx có độ dài địa chỉ người nhận không hợp lệ',
+              'Lệnh TransferObjects #$cmdIdx có địa chỉ người nhận không hợp lệ: $e',
             );
           }
           recipients.add(recAddr);
@@ -201,30 +227,101 @@ class SuiSec01Guard {
                 warnings.add('CẢNH BÁO: Lệnh #$cmdIdx chuyển Input #${obj.index} bất thường');
               }
             } else if (obj is SuiResultArgument) {
-              if (!splitFromGasCoinCmdIndices.contains(obj.index)) {
+              final splitInfo = splitCmdInfos[obj.index];
+              if (splitInfo == null || !splitInfo.isFromGasCoin) {
                 isHighRisk = true;
                 warnings.add(
                   'CẢNH BÁO: Lệnh #$cmdIdx chuyển kết quả từ lệnh #${obj.index} (không phải GasCoin Split)',
                 );
+                extraDetails['Transfer #$cmdIdx.$objIdx'] = 'Result#${obj.index} -> $recAddr';
               } else {
-                final amts = splitAmountsByCmd[obj.index];
-                final amtSummary = amts != null && amts.isNotEmpty
-                    ? '${_formatMist(amts.first)} SUI'
-                    : 'SplitResult';
-                extraDetails['Transfer #$cmdIdx'] = '$amtSummary -> $recAddr';
+                final totalSplit = splitInfo.amounts.fold(BigInt.zero, (a, b) => a + b);
+                final amtSummary = splitInfo.amounts.length == 1
+                    ? '${_formatMist(totalSplit)} SUI'
+                    : '${_formatMist(totalSplit)} SUI (${splitInfo.amounts.length} phần: ${splitInfo.amounts.map(_formatMist).join(' + ')})';
+                if (splitInfo.isTaintedByMerge) {
+                  isHighRisk = true;
+                  final mergedList = splitInfo.mergedSources.join(', ');
+                  warnings.add(
+                    'CẢNH BÁO NGUY HIỂM: Kết quả Result#${obj.index} đã bị MergeCoins gộp thêm [$mergedList] trước khi chuyển tới $recAddr!',
+                  );
+                  extraDetails['Transfer #$cmdIdx.$objIdx'] =
+                      '$amtSummary + MERGED [$mergedList] -> $recAddr';
+                } else {
+                  extraDetails['Transfer #$cmdIdx.$objIdx'] = '$amtSummary -> $recAddr';
+                }
               }
             } else if (obj is SuiNestedResultArgument) {
-              if (!splitFromGasCoinCmdIndices.contains(obj.commandIndex)) {
+              final splitInfo = splitCmdInfos[obj.commandIndex];
+              if (splitInfo == null ||
+                  !splitInfo.isFromGasCoin ||
+                  obj.resultIndex < 0 ||
+                  obj.resultIndex >= splitInfo.amounts.length) {
                 isHighRisk = true;
                 warnings.add(
-                  'CẢNH BÁO: Lệnh #$cmdIdx chuyển kết quả lồng từ lệnh #${obj.commandIndex}',
+                  'CẢNH BÁO: Lệnh #$cmdIdx chuyển kết quả lồng NestedResult(${obj.commandIndex}, ${obj.resultIndex}) không xác định giá trị',
                 );
+                extraDetails['Transfer #$cmdIdx.$objIdx'] =
+                    'NestedResult(${obj.commandIndex}, ${obj.resultIndex}) -> $recAddr';
+              } else {
+                final nestedAmt = splitInfo.amounts[obj.resultIndex];
+                final amtSummary = '${_formatMist(nestedAmt)} SUI';
+                if (splitInfo.isTaintedByMerge) {
+                  isHighRisk = true;
+                  final mergedList = splitInfo.mergedSources.join(', ');
+                  warnings.add(
+                    'CẢNH BÁO NGUY HIỂM: Kết quả NestedResult(${obj.commandIndex}, ${obj.resultIndex}) đã bị MergeCoins gộp thêm [$mergedList] trước khi chuyển tới $recAddr!',
+                  );
+                  extraDetails['Transfer #$cmdIdx.$objIdx'] =
+                      '$amtSummary + MERGED [$mergedList] -> $recAddr';
+                } else {
+                  extraDetails['Transfer #$cmdIdx.$objIdx'] = '$amtSummary -> $recAddr';
+                }
               }
             }
           }
         } else if (cmd is SuiMergeCoinsCommand) {
           isHighRisk = true;
-          warnings.add('LƯU Ý: Giao dịch chứa lệnh MergeCoins (#$cmdIdx)');
+          final destDesc = _describeSuiArgument(cmd.destination, ptb.inputs);
+          if (destDesc == null) {
+            return AuditVerdict.rejected(
+              'Lệnh MergeCoins #$cmdIdx tham chiếu đích ngoài phạm vi inputs',
+            );
+          }
+          final srcDescriptions = <String>[];
+          for (final src in cmd.sources) {
+            final srcDesc = _describeSuiArgument(src, ptb.inputs);
+            if (srcDesc == null) {
+              return AuditVerdict.rejected(
+                'Lệnh MergeCoins #$cmdIdx tham chiếu nguồn ngoài phạm vi inputs',
+              );
+            }
+            srcDescriptions.add(srcDesc);
+          }
+
+          if (cmd.destination is SuiResultArgument) {
+            final destIdx = (cmd.destination as SuiResultArgument).index;
+            final info = splitCmdInfos[destIdx];
+            if (info != null) {
+              info.isTaintedByMerge = true;
+              info.mergedSources.addAll(srcDescriptions);
+            }
+          } else if (cmd.destination is SuiNestedResultArgument) {
+            final destCmd = (cmd.destination as SuiNestedResultArgument).commandIndex;
+            final info = splitCmdInfos[destCmd];
+            if (info != null) {
+              info.isTaintedByMerge = true;
+              info.mergedSources.addAll(srcDescriptions);
+            }
+          } else if (cmd.destination is SuiGasCoinArgument) {
+            gasCoinTaintedByMerge = true;
+          }
+
+          final joinedSources = srcDescriptions.join(', ');
+          extraDetails['MergeCoins #$cmdIdx'] = '$destDesc <- [$joinedSources]';
+          warnings.add(
+            'CẢNH BÁO: Lệnh MergeCoins (#$cmdIdx) gộp [$joinedSources] vào $destDesc',
+          );
         } else {
           isHighRisk = true;
           warnings.add('CẢNH BÁO: Giao dịch chứa lệnh Move Call hoặc Contract interaction phức tạp');
@@ -262,6 +359,23 @@ class SuiSec01Guard {
       signerKey.dispose();
       SuiEd25519.zeroize(seed);
     }
+  }
+
+  static String? _describeSuiArgument(SuiArgument arg, List<SuiCallArg> inputs) {
+    if (arg is SuiGasCoinArgument) return 'GasCoin';
+    if (arg is SuiResultArgument) return 'Result(${arg.index})';
+    if (arg is SuiNestedResultArgument) {
+      return 'NestedResult(${arg.commandIndex}, ${arg.resultIndex})';
+    }
+    if (arg is SuiInputArgument) {
+      if (arg.index < 0 || arg.index >= inputs.length) return null;
+      final input = inputs[arg.index];
+      if (input is SuiObjectArg) {
+        return 'Input(${arg.index}: Object ${input.objectRef.objectId})';
+      }
+      return 'Input(${arg.index})';
+    }
+    return arg.toString();
   }
 
   /// Audits and signs the Sui transaction, returning [SuiSignResponseUr].
@@ -325,4 +439,16 @@ class SuiSec01Guard {
       (Match m) => '${m[1]},',
     );
   }
+}
+
+class _SuiSplitInfo {
+  final bool isFromGasCoin;
+  final List<BigInt> amounts;
+  bool isTaintedByMerge = false;
+  final List<String> mergedSources = [];
+
+  _SuiSplitInfo({
+    required this.isFromGasCoin,
+    required this.amounts,
+  });
 }

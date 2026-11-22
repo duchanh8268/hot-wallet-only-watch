@@ -320,5 +320,193 @@ void main() {
       expect(verdict.isApproved, isFalse);
       expect(verdict.rejectReason, contains('RLP'));
     });
+
+    test('Surfaces non-zero ETH value attached to ERC-20 approve', () {
+      final spender = '3535353535353535353535353535353535353535';
+      final calldata = hexDecode(
+        '095ea7b3'
+        '000000000000000000000000$spender'
+        '0000000000000000000000000000000000000000000000000000000000000064',
+      );
+      final tx = Eip1559Transaction(
+        chainId: 1,
+        nonce: BigInt.zero,
+        maxPriorityFeePerGas: BigInt.from(1000000000),
+        maxFeePerGas: BigInt.from(20000000000),
+        gasLimit: BigInt.from(60000),
+        to: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        value: BigInt.parse('10000000000000000000'), // 10 ETH attached!
+        data: calldata,
+      );
+
+      final verdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'ethereum',
+          network: 'mainnet',
+          payloadType: EthPayloadType.eip1559,
+          rawPayload: tx.unsignedSigningBytes,
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+      );
+
+      expect(verdict.isApproved, isTrue);
+      expect(verdict.isHighRiskContractCall, isTrue);
+      expect(verdict.amountDisplay, contains('10.000000 ETH'));
+      expect(verdict.extraDetails['Native ETH Attached'], contains('10.000000 ETH'));
+      expect(verdict.warnings.any((w) => w.contains('10.000000 ETH')), isTrue);
+    });
+
+    test('Rejects trailing whitespace network chainId bypass and chain aliases', () {
+      final mainnetTx = Eip1559Transaction(
+        chainId: 1,
+        nonce: BigInt.zero,
+        maxPriorityFeePerGas: BigInt.from(1000000000),
+        maxFeePerGas: BigInt.from(20000000000),
+        gasLimit: BigInt.from(21000),
+        to: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+        value: BigInt.from(1000000000000000000),
+      );
+
+      // Whitespace around network ('sepolia ') must NOT bypass chainId check (1 != 11155111)
+      final spaceVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'ethereum',
+          network: 'sepolia ',
+          payloadType: EthPayloadType.eip1559,
+          rawPayload: mainnetTx.unsignedSigningBytes,
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'sepolia',
+      );
+      expect(spaceVerdict.isApproved, isFalse);
+      expect(spaceVerdict.rejectReason, contains('Chain ID'));
+
+      // Non-canonical chain alias ('eth') must be rejected
+      final aliasVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'eth',
+          network: 'sepolia',
+          payloadType: EthPayloadType.eip1559,
+          rawPayload: mainnetTx.unsignedSigningBytes,
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'sepolia',
+      );
+      expect(aliasVerdict.isApproved, isFalse);
+
+      // Whitespace around Hyperliquid 'mainnet ' must NOT downgrade expectedHlChain to Testnet
+      const testnetAction = HlUsdSendAction(
+        isMainnet: false,
+        destination: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+        amount: '100',
+        time: 1700000000000,
+      );
+      final td = HyperliquidTxBuilder.buildUsdSendTypedData(testnetAction);
+      final hlSpaceVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'hyperliquid',
+          network: 'mainnet ',
+          payloadType: EthPayloadType.eip712,
+          rawPayload: Uint8List.fromList(utf8.encode(jsonEncode(td.toJson()))),
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+      );
+      expect(hlSpaceVerdict.isApproved, isFalse);
+    });
+
+    test('Rejects EIP-712 payloads with unhashed domain or message fields omitted from types', () {
+      // Domain includes chainId and verifyingContract while types['EIP712Domain'] omits them
+      final spoofedDomainPayload = utf8.encode(jsonEncode({
+        'types': {
+          'EIP712Domain': [
+            {'name': 'name', 'type': 'string'},
+            {'name': 'version', 'type': 'string'},
+          ],
+          'HyperliquidTransaction:UsdSend': [
+            {'name': 'hyperliquidChain', 'type': 'string'},
+            {'name': 'destination', 'type': 'string'},
+            {'name': 'amount', 'type': 'string'},
+            {'name': 'time', 'type': 'uint64'},
+          ],
+        },
+        'primaryType': 'HyperliquidTransaction:UsdSend',
+        'domain': {
+          'name': 'Exchange',
+          'version': '1',
+          'chainId': 1337,
+          'verifyingContract': '0x0000000000000000000000000000000000000000',
+        },
+        'message': {
+          'hyperliquidChain': 'Testnet',
+          'destination': '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+          'amount': '100',
+          'time': 1700000000000,
+        },
+      }));
+
+      final badDomainVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'hyperliquid',
+          network: 'testnet',
+          payloadType: EthPayloadType.eip712,
+          rawPayload: Uint8List.fromList(spoofedDomainPayload),
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'testnet',
+      );
+      expect(badDomainVerdict.isApproved, isFalse);
+
+      // Message includes unhashed 'spender' not present in types['Permit']
+      final spoofedMsgPayload = utf8.encode(jsonEncode({
+        'types': {
+          'EIP712Domain': [
+            {'name': 'name', 'type': 'string'},
+            {'name': 'chainId', 'type': 'uint256'},
+          ],
+          'Permit': [
+            {'name': 'amount', 'type': 'uint256'},
+          ],
+        },
+        'primaryType': 'Permit',
+        'domain': {'name': 'Demo', 'chainId': 1},
+        'message': {
+          'amount': '1000',
+          'spender': '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+        },
+      }));
+
+      final badMsgVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: EthSignRequestUr(
+          requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+          chain: 'ethereum',
+          network: 'mainnet',
+          payloadType: EthPayloadType.eip712,
+          rawPayload: Uint8List.fromList(spoofedMsgPayload),
+        ),
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+      );
+      expect(badMsgVerdict.isApproved, isFalse);
+      expect(badMsgVerdict.rejectReason, contains('Message'));
+    });
   });
 }

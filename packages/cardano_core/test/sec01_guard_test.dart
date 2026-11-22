@@ -510,13 +510,13 @@ void main() {
 
     test('Blocks non-canonical TxBody CBOR (e.g. non-shortest integer encoding)', () {
       final valid = buildValidTransfer();
-      // Encode identical TxBody with key 8 using non-canonical 1-byte uint (0x18 0x00 instead of 0x00)
+      // Encode identical TxBody with key 15 using non-canonical 1-byte uint (0x18 0x00 instead of 0x00)
       final decodedMap = CborValue.decode(valid.txBodyCbor) as CborMap;
       final builder = BytesBuilder(copy: false);
       // Map with same number of items, manually write non-canonical final entry value
-      // Simplest non-canonical CBOR: wrap key 8 value 0 as `18 00`
+      // Simplest non-canonical CBOR: wrap key 15 value 0 as `18 00`
       final raw = valid.txBodyCbor;
-      expect(raw.last, equals(0x00)); // key 8 value is 0 (testnet tag)
+      expect(raw.last, equals(0x00)); // key 15 value is 0 (testnet tag)
       builder.add(raw.sublist(0, raw.length - 1));
       builder.add(const [0x18, 0x00]); // non-canonical zero!
       final nonCanonicalCbor = builder.toBytes();
@@ -529,7 +529,7 @@ void main() {
         changeOutputs: valid.changeOutputs,
         requireStakeWitness: false,
       );
-      expect(decodedMap.getByIntKey(8), isNotNull);
+      expect(decodedMap.getByIntKey(15), isNotNull);
       expect(
         () => Sec01Guard.audit(
           request: tampered,
@@ -596,6 +596,148 @@ void main() {
             Sec01ErrorCode.malformedTxBody,
           ),
         ),
+      );
+    });
+
+    test('SEC-01 uses CBOR key 15 for network_id and key 8 for validity_interval_start', () {
+      final inAddr = walletKey.deriveBaseAddressBytes(role: 0, index: 0, network: CardanoNetwork.preprod);
+      final outAddr = attackerKey.deriveBaseAddressBytes(role: 0, index: 0, network: CardanoNetwork.preprod);
+      final chgAddr = walletKey.deriveBaseAddressBytes(role: 1, index: 0, network: CardanoNetwork.preprod);
+      final txHash = Uint8List.fromList(List<int>.filled(32, 0x44));
+
+      // Attack: validity_interval_start (key 8) = 0 (preprod tag) while network_id (key 15) = 1 (mainnet)
+      final spoofedNetBody = ConwayTxBody(
+        inputs: [TxInput(txHash: txHash, index: 0)],
+        outputs: [
+          TxOutput(addressBytes: outAddr, lovelace: BigInt.from(2000000)),
+          TxOutput(addressBytes: chgAddr, lovelace: BigInt.from(7820000)),
+        ],
+        fee: BigInt.from(180000),
+        ttl: 90000000,
+        validityIntervalStart: 0,
+        networkId: 1,
+      );
+
+      final badNetReq = CardanoSignRequestUr(
+        requestId: Uint8List(16),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(spoofedNetBody),
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: txHash,
+            outputIndex: 0,
+            addressBytes: inAddr,
+            lovelace: BigInt.from(10000000),
+            derivationRole: 0,
+            derivationIndex: 0,
+          ),
+        ],
+        changeOutputs: const [UrChangeOutputRef(txOutputIndex: 1, internalIndex: 0)],
+        requireStakeWitness: false,
+      );
+
+      expect(
+        () => Sec01Guard.audit(
+          request: badNetReq,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.networkMismatch,
+          ),
+        ),
+      );
+
+      // Valid Preprod tx with non-zero validityIntervalStart (key 8 = 1) and networkId (key 15 = 0) passes
+      final validBody = ConwayTxBody(
+        inputs: spoofedNetBody.inputs,
+        outputs: spoofedNetBody.outputs,
+        fee: spoofedNetBody.fee,
+        ttl: spoofedNetBody.ttl,
+        validityIntervalStart: 1,
+        networkId: 0,
+      );
+      final validReq = CardanoSignRequestUr(
+        requestId: Uint8List(16),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(validBody),
+        utxoInputs: badNetReq.utxoInputs,
+        changeOutputs: badNetReq.changeOutputs,
+        requireStakeWitness: false,
+      );
+      final report = Sec01Guard.audit(
+        request: validReq,
+        masterKey: walletKey,
+        expectedNetwork: CardanoNetwork.preprod,
+      );
+      expect(report.txBody.validityIntervalStart, equals(1));
+      expect(report.txBody.networkId, equals(0));
+    });
+
+    test('SEC-01 rejects negative fee, negative cert coin, and negative UTXO input lovelace', () {
+      final inAddr = walletKey.deriveBaseAddressBytes(role: 0, index: 0, network: CardanoNetwork.preprod);
+      final outAddr = attackerKey.deriveBaseAddressBytes(role: 0, index: 0, network: CardanoNetwork.preprod);
+      final txHash = Uint8List.fromList(List<int>.filled(32, 0x77));
+
+      final negFeeBodyCbor = CborMap([
+        CborMapEntry(
+          CborInt.fromInt(0),
+          CborTag(258, CborArray([CborArray([CborBytes(txHash), CborInt.fromInt(0)])])),
+        ),
+        CborMapEntry(
+          CborInt.fromInt(1),
+          CborArray([CborArray([CborBytes(outAddr), CborInt.fromInt(5000000)])]),
+        ),
+        CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(-3000000)),
+        CborMapEntry(CborInt.fromInt(15), CborInt.fromInt(0)),
+      ]).encode();
+
+      final badReq = CardanoSignRequestUr(
+        requestId: Uint8List(16),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: negFeeBodyCbor,
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: txHash,
+            outputIndex: 0,
+            addressBytes: inAddr,
+            lovelace: BigInt.from(2000000),
+            derivationRole: 0,
+            derivationIndex: 0,
+          ),
+        ],
+        changeOutputs: const [],
+        requireStakeWitness: false,
+      );
+
+      expect(
+        () => Sec01Guard.audit(
+          request: badReq,
+          masterKey: walletKey,
+          expectedNetwork: CardanoNetwork.preprod,
+        ),
+        throwsA(
+          isA<Sec01SecurityException>().having(
+            (e) => e.code,
+            'code',
+            Sec01ErrorCode.malformedTxBody,
+          ),
+        ),
+      );
+
+      expect(
+        () => UrUtxoInputContext(
+          txHash: txHash,
+          outputIndex: 0,
+          addressBytes: inAddr,
+          lovelace: BigInt.from(-1000000),
+          derivationRole: 0,
+          derivationIndex: 0,
+        ),
+        throwsArgumentError,
       );
     });
   });

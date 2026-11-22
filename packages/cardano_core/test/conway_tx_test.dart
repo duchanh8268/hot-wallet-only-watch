@@ -217,5 +217,64 @@ void main() {
         throwsFormatException,
       );
     });
+
+    test('Maps validityIntervalStart to CBOR key 8 and networkId to CBOR key 15', () {
+      final addr = Uint8List.fromList([0x00, ...List<int>.filled(56, 1)]);
+      final body = ConwayTxBody(
+        inputs: [TxInput(txHash: Uint8List.fromList(List<int>.filled(32, 0x11)), index: 0)],
+        outputs: [TxOutput(addressBytes: addr, lovelace: BigInt.from(1500000))],
+        fee: BigInt.from(170000),
+        ttl: 90000000,
+        validityIntervalStart: 89000000,
+        networkId: 1,
+      );
+
+      final encoded = ConwayTxSerializer.encodeTxBody(body);
+      final root = CborValue.decode(encoded) as CborMap;
+      expect((root.getByIntKey(8) as CborInt).toInt(), equals(89000000));
+      expect((root.getByIntKey(15) as CborInt).toInt(), equals(1));
+
+      final decoded = ConwayTxSerializer.decodeTxBody(encoded);
+      expect(decoded.validityIntervalStart, equals(89000000));
+      expect(decoded.networkId, equals(1));
+    });
+
+    test('Rejects negative fee, negative certificate coin, and negative validity values', () {
+      final addr = Uint8List.fromList([0x00, ...List<int>.filled(56, 1)]);
+      final negFeeCbor = CborMap([
+        CborMapEntry(
+          CborInt.fromInt(0),
+          CborArray([CborArray([CborBytes(Uint8List(32)), CborInt.fromInt(0)])]),
+        ),
+        CborMapEntry(
+          CborInt.fromInt(1),
+          CborArray([CborArray([CborBytes(addr), CborInt.fromInt(2000000)])]),
+        ),
+        CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(-5000000)),
+      ]).encode();
+
+      expect(() => ConwayTxSerializer.decodeTxBody(negFeeCbor), throwsFormatException);
+
+      final stakeCredBytes = CborArray([CborInt.fromInt(0), CborBytes(Uint8List(28))]);
+      final negCertCbor = CborMap([
+        CborMapEntry(
+          CborInt.fromInt(0),
+          CborArray([CborArray([CborBytes(Uint8List(32)), CborInt.fromInt(0)])]),
+        ),
+        CborMapEntry(
+          CborInt.fromInt(1),
+          CborArray([CborArray([CborBytes(addr), CborInt.fromInt(2000000)])]),
+        ),
+        CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(170000)),
+        CborMapEntry(
+          CborInt.fromInt(4),
+          CborArray([
+            CborArray([CborInt.fromInt(7), stakeCredBytes, CborInt.fromInt(-2000000)]),
+          ]),
+        ),
+      ]).encode();
+
+      expect(() => ConwayTxSerializer.decodeTxBody(negCertCbor), throwsFormatException);
+    });
   });
 }

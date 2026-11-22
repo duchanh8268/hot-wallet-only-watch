@@ -234,5 +234,119 @@ void main() {
       );
       expect(acctMismatch.isApproved, isFalse);
     });
+
+    test('Surfaces MergeCoins SuiObjectArg taint, multi-amount SplitCoins totals, and NestedResult transfers', () {
+      const attacker = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      final gasRef = SuiObjectRef(
+        objectId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+        version: BigInt.one,
+        digest: '0x3333333333333333333333333333333333333333333333333333333333333333',
+      );
+      const hiddenCoinId = '0x9999999999999999999999999999999999999999999999999999999999999999';
+      final hiddenCoinRef = SuiObjectRef(
+        objectId: hiddenCoinId,
+        version: BigInt.from(7),
+        digest: '0x4444444444444444444444444444444444444444444444444444444444444444',
+      );
+
+      // (A) SplitCoins(GasCoin, [1 MIST]) -> MergeCoins(Result(0), [SuiObjectArg(hiddenCoin)]) -> TransferObjects([Result(0)], attacker)
+      final mergeAttackTx = SuiTransactionData(
+        v1: SuiTransactionDataV1(
+          ptb: SuiProgrammableTransaction(
+            inputs: [
+              SuiPureCallArg.u64(BigInt.one),
+              SuiObjectArg(hiddenCoinRef),
+              SuiPureCallArg.address(attacker),
+            ],
+            commands: [
+              SuiSplitCoinsCommand(
+                coin: const SuiGasCoinArgument(),
+                amounts: [const SuiInputArgument(0)],
+              ),
+              SuiMergeCoinsCommand(
+                destination: const SuiResultArgument(0),
+                sources: [const SuiInputArgument(1)],
+              ),
+              SuiTransferObjectsCommand(
+                objects: [const SuiResultArgument(0)],
+                recipient: const SuiInputArgument(2),
+              ),
+            ],
+          ),
+          sender: myAddress,
+          gasData: SuiGasData(
+            payment: [gasRef],
+            owner: myAddress,
+            price: BigInt.from(1000),
+            budget: BigInt.from(5000000),
+          ),
+        ),
+      );
+
+      final mergeVerdict = SuiSec01Guard.audit(
+        entropy: entropy,
+        request: SuiSignRequestUr(
+          requestId: Uint8List(16),
+          chain: 'sui',
+          network: 'mainnet',
+          txBytes: mergeAttackTx.toBcs(),
+          accountIndex: 0,
+          addressIndex: 0,
+        ),
+        expectedAccountIndex: 0,
+      );
+      expect(mergeVerdict.isApproved, isTrue);
+      expect(mergeVerdict.isHighRiskContractCall, isTrue);
+      expect(mergeVerdict.extraDetails['MergeCoins #1'], contains(hiddenCoinId));
+      expect(mergeVerdict.extraDetails['Transfer #2.0'], contains('MERGED'));
+      expect(mergeVerdict.extraDetails['Transfer #2.0'], contains(hiddenCoinId));
+      expect(mergeVerdict.warnings.any((w) => w.contains(hiddenCoinId) && w.contains('MergeCoins')), isTrue);
+
+      // (B) Multi-amount SplitCoins(GasCoin, [1 MIST, 10 SUI]) -> Transfer Result(0) & NestedResult(0, 1)
+      final multiSplitTx = SuiTransactionData(
+        v1: SuiTransactionDataV1(
+          ptb: SuiProgrammableTransaction(
+            inputs: [
+              SuiPureCallArg.u64(BigInt.one),
+              SuiPureCallArg.u64(BigInt.from(10000000000)),
+              SuiPureCallArg.address(attacker),
+            ],
+            commands: [
+              SuiSplitCoinsCommand(
+                coin: const SuiGasCoinArgument(),
+                amounts: [const SuiInputArgument(0), const SuiInputArgument(1)],
+              ),
+              SuiTransferObjectsCommand(
+                objects: [const SuiResultArgument(0), const SuiNestedResultArgument(0, 1)],
+                recipient: const SuiInputArgument(2),
+              ),
+            ],
+          ),
+          sender: myAddress,
+          gasData: SuiGasData(
+            payment: [gasRef],
+            owner: myAddress,
+            price: BigInt.from(1000),
+            budget: BigInt.from(5000000),
+          ),
+        ),
+      );
+
+      final splitVerdict = SuiSec01Guard.audit(
+        entropy: entropy,
+        request: SuiSignRequestUr(
+          requestId: Uint8List(16),
+          chain: 'sui',
+          network: 'mainnet',
+          txBytes: multiSplitTx.toBcs(),
+          accountIndex: 0,
+          addressIndex: 0,
+        ),
+        expectedAccountIndex: 0,
+      );
+      expect(splitVerdict.isApproved, isTrue);
+      expect(splitVerdict.extraDetails['Transfer #1.0'], contains('10.0000 SUI'));
+      expect(splitVerdict.extraDetails['Transfer #1.1'], contains('10.0000 SUI'));
+    });
   });
 }

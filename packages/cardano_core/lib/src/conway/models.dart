@@ -239,7 +239,11 @@ class StakeRegistrationCert extends CardanoCertificate {
   final StakeCredential stakeCredential;
   final BigInt? coin; // null => legacy tag 0; non-null => Conway tag 7
 
-  const StakeRegistrationCert(this.stakeCredential, {this.coin});
+  StakeRegistrationCert(this.stakeCredential, {this.coin}) {
+    if (coin != null && coin! < BigInt.zero) {
+      throw ArgumentError('StakeRegistrationCert coin cannot be negative');
+    }
+  }
 }
 
 class StakeDeregistrationCert extends CardanoCertificate {
@@ -247,7 +251,11 @@ class StakeDeregistrationCert extends CardanoCertificate {
   final StakeCredential stakeCredential;
   final BigInt? coin; // null => legacy tag 1; non-null => Conway tag 8
 
-  const StakeDeregistrationCert(this.stakeCredential, {this.coin});
+  StakeDeregistrationCert(this.stakeCredential, {this.coin}) {
+    if (coin != null && coin! < BigInt.zero) {
+      throw ArgumentError('StakeDeregistrationCert coin cannot be negative');
+    }
+  }
 }
 
 class StakeDelegationCert extends CardanoCertificate {
@@ -296,6 +304,9 @@ class StakeRegDelegCert extends CardanoCertificate {
     if (this.poolKeyHash.length != 28) {
       throw ArgumentError('Pool key hash must be 28 bytes');
     }
+    if (coin < BigInt.zero) {
+      throw ArgumentError('StakeRegDelegCert coin cannot be negative');
+    }
   }
 }
 
@@ -305,7 +316,11 @@ class VoteRegDelegCert extends CardanoCertificate {
   final DRep drep;
   final BigInt coin;
 
-  const VoteRegDelegCert(this.stakeCredential, this.drep, this.coin);
+  VoteRegDelegCert(this.stakeCredential, this.drep, this.coin) {
+    if (coin < BigInt.zero) {
+      throw ArgumentError('VoteRegDelegCert coin cannot be negative');
+    }
+  }
 }
 
 class StakeVoteRegDelegCert extends CardanoCertificate {
@@ -323,6 +338,9 @@ class StakeVoteRegDelegCert extends CardanoCertificate {
   ) : poolKeyHash = Uint8List.fromList(poolKeyHash) {
     if (this.poolKeyHash.length != 28) {
       throw ArgumentError('Pool key hash must be 28 bytes');
+    }
+    if (coin < BigInt.zero) {
+      throw ArgumentError('StakeVoteRegDelegCert coin cannot be negative');
     }
   }
 }
@@ -351,6 +369,7 @@ class ConwayTxBody {
   final int? ttl;
   final List<CardanoCertificate> certificates;
   final List<Withdrawal> withdrawals;
+  final int? validityIntervalStart;
   final int? networkId;
 
   ConwayTxBody({
@@ -360,8 +379,22 @@ class ConwayTxBody {
     this.ttl,
     this.certificates = const [],
     this.withdrawals = const [],
+    this.validityIntervalStart,
     this.networkId,
-  });
+  }) {
+    if (fee < BigInt.zero) {
+      throw ArgumentError('Transaction fee cannot be negative: $fee');
+    }
+    if (ttl != null && ttl! < 0) {
+      throw ArgumentError('Transaction ttl cannot be negative: $ttl');
+    }
+    if (validityIntervalStart != null && validityIntervalStart! < 0) {
+      throw ArgumentError('validityIntervalStart cannot be negative: $validityIntervalStart');
+    }
+    if (networkId != null && networkId != 0 && networkId != 1) {
+      throw ArgumentError('Invalid networkId (expected 0 or 1): $networkId');
+    }
+  }
 }
 
 /// Ed25519 VKey Witness `[vkey(32B), signature(64B)]`.

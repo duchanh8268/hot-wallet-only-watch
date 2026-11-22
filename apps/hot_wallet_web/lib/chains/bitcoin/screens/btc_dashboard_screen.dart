@@ -305,7 +305,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
               child: Text(isVi ? 'Hủy' : 'Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 try {
                   final recipient = toAddrCtrl.text.trim();
                   if (recipient.isEmpty) throw Exception('Vui lòng nhập địa chỉ nhận');
@@ -326,19 +326,23 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                   // Change address: standard internal derivation address matching Cold Wallet
                   final changeAddress = active.receiveAddress;
 
-                  final btcInputs = utxoList.map((u) {
-                    final outpoint = OutPoint(
-                      txid: u.txid,
-                      vout: u.vout,
+                  // Fetch nonWitnessUtxo raw previous transactions for BIP-143 SEC-01 verification
+                  final networkId = appState.activeChainNetwork.id;
+                  final btcInputs = <BtcUtxo>[];
+                  for (final u in utxoList) {
+                    final rawPrevTx = u.rawTxBytes ??
+                        await BitcoinHotPlugin.instance.mempoolService.getRawTxBytes(networkId, u.txid);
+                    btcInputs.add(
+                      BtcUtxo(
+                        outpoint: OutPoint(txid: u.txid, vout: u.vout),
+                        valueSat: u.valueSat,
+                        accountIndex: active.accountIndex,
+                        change: 0,
+                        addressIndex: 0,
+                        nonWitnessUtxo: rawPrevTx,
+                      ),
                     );
-                    return BtcUtxo(
-                      outpoint: outpoint,
-                      valueSat: u.valueSat,
-                      accountIndex: active.accountIndex,
-                      change: 0,
-                      addressIndex: 0,
-                    );
-                  }).toList();
+                  }
 
                   final buildResult = BtcTxBuilder.buildP2wpkhTx(
                     availableUtxos: btcInputs,
@@ -355,7 +359,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                   final signReq = BtcSignRequestUr(
                     requestId: requestId,
                     chain: 'bitcoin',
-                    network: appState.activeChainNetwork.id,
+                    network: networkId,
                     transaction: buildResult.transaction,
                     accountIndex: active.accountIndex,
                     feeSat: buildResult.feeSat,
@@ -363,6 +367,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
 
                   _pendingBtcTx = buildResult.transaction;
                   _pendingRequestId = requestId;
+                  if (!ctx.mounted) return;
                   Navigator.of(ctx).pop();
 
                   _showUrQrDialog(
@@ -373,7 +378,9 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                     buildResult: buildResult,
                   );
                 } catch (e) {
-                  setDialogState(() => dialogError = e.toString());
+                  if (ctx.mounted) {
+                    setDialogState(() => dialogError = e.toString());
+                  }
                 }
               },
               child: Text(isVi ? 'Tạo Mã QR Ký' : 'Generate Sign QR'),

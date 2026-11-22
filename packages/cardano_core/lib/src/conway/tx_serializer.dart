@@ -158,10 +158,19 @@ class ConwayTxSerializer {
       );
     }
 
-    if (body.networkId != null) {
+    if (body.validityIntervalStart != null) {
       entries.add(
         CborMapEntry(
           CborInt.fromInt(8),
+          CborInt.fromInt(body.validityIntervalStart!),
+        ),
+      );
+    }
+
+    if (body.networkId != null) {
+      entries.add(
+        CborMapEntry(
+          CborInt.fromInt(15),
           CborInt.fromInt(body.networkId!),
         ),
       );
@@ -177,12 +186,12 @@ class ConwayTxSerializer {
       throw const FormatException('TxBody CBOR must be a map');
     }
 
-    const supportedKeys = <int>{0, 1, 2, 3, 4, 5, 8};
+    const supportedKeys = <int>{0, 1, 2, 3, 4, 5, 8, 15};
     for (final entry in root.entries) {
       final key = entry.key;
       if (key is! CborInt ||
           key.value < BigInt.zero ||
-          key.value > BigInt.from(8) ||
+          key.value > BigInt.from(15) ||
           !supportedKeys.contains(key.toInt())) {
         throw FormatException(
           'Unsupported or unknown Conway TxBody CBOR key: $key',
@@ -219,13 +228,19 @@ class ConwayTxSerializer {
 
     // 2: fee
     final rawFee = root.getByIntKey(2);
-    if (rawFee is! CborInt) {
-      throw const FormatException('TxBody missing fee (key 2)');
+    if (rawFee is! CborInt || rawFee.value < BigInt.zero) {
+      throw const FormatException('TxBody fee (key 2) missing or negative');
     }
 
     // 3: ttl (optional)
     final rawTtl = root.getByIntKey(3);
-    final ttl = rawTtl is CborInt ? rawTtl.toInt() : null;
+    int? ttl;
+    if (rawTtl != null) {
+      if (rawTtl is! CborInt || rawTtl.value < BigInt.zero) {
+        throw const FormatException('TxBody ttl (key 3) must be a non-negative integer');
+      }
+      ttl = rawTtl.toInt();
+    }
 
     // 4: certificates (optional)
     final certs = <CardanoCertificate>[];
@@ -257,9 +272,28 @@ class ConwayTxSerializer {
       }
     }
 
-    // 8: network_id (optional)
-    final rawNet = root.getByIntKey(8);
-    final networkId = rawNet is CborInt ? rawNet.toInt() : null;
+    // 8: validity_interval_start (optional, Conway CDDL key 8)
+    final rawValStart = root.getByIntKey(8);
+    int? validityIntervalStart;
+    if (rawValStart != null) {
+      if (rawValStart is! CborInt || rawValStart.value < BigInt.zero) {
+        throw const FormatException(
+          'TxBody validity_interval_start (key 8) must be a non-negative integer',
+        );
+      }
+      validityIntervalStart = rawValStart.toInt();
+    }
+
+    // 15: network_id (optional, Conway CDDL key 15)
+    final rawNet = root.getByIntKey(15);
+    int? networkId;
+    if (rawNet != null) {
+      if (rawNet is! CborInt ||
+          (rawNet.value != BigInt.zero && rawNet.value != BigInt.one)) {
+        throw const FormatException('TxBody network_id (key 15) must be 0 or 1');
+      }
+      networkId = rawNet.toInt();
+    }
 
     return ConwayTxBody(
       inputs: inputs,
@@ -268,6 +302,7 @@ class ConwayTxSerializer {
       ttl: ttl,
       certificates: certs,
       withdrawals: withdrawals,
+      validityIntervalStart: validityIntervalStart,
       networkId: networkId,
     );
   }
@@ -494,11 +529,15 @@ class ConwayTxSerializer {
         return StakeDelegationCert(cred, pool.bytes);
       case 7:
         final coin = val.items[2];
-        if (coin is! CborInt) throw const FormatException('Invalid reg coin');
+        if (coin is! CborInt || coin.value < BigInt.zero) {
+          throw const FormatException('Invalid or negative reg coin');
+        }
         return StakeRegistrationCert(cred, coin: coin.value);
       case 8:
         final coin = val.items[2];
-        if (coin is! CborInt) throw const FormatException('Invalid unreg coin');
+        if (coin is! CborInt || coin.value < BigInt.zero) {
+          throw const FormatException('Invalid or negative unreg coin');
+        }
         return StakeDeregistrationCert(cred, coin: coin.value);
       case 9:
         return VoteDelegationCert(cred, _decodeDRep(val.items[2]));
@@ -509,18 +548,20 @@ class ConwayTxSerializer {
       case 11:
         final pool = val.items[2];
         final coin = val.items[3];
-        if (pool is! CborBytes || coin is! CborInt) {
+        if (pool is! CborBytes || coin is! CborInt || coin.value < BigInt.zero) {
           throw const FormatException('Invalid stake_reg_deleg cert');
         }
         return StakeRegDelegCert(cred, pool.bytes, coin.value);
       case 12:
         final coin = val.items[3];
-        if (coin is! CborInt) throw const FormatException('Invalid vote_reg_deleg coin');
+        if (coin is! CborInt || coin.value < BigInt.zero) {
+          throw const FormatException('Invalid or negative vote_reg_deleg coin');
+        }
         return VoteRegDelegCert(cred, _decodeDRep(val.items[2]), coin.value);
       case 13:
         final pool = val.items[2];
         final coin = val.items[4];
-        if (pool is! CborBytes || coin is! CborInt) {
+        if (pool is! CborBytes || coin is! CborInt || coin.value < BigInt.zero) {
           throw const FormatException('Invalid stake_vote_reg_deleg cert');
         }
         return StakeVoteRegDelegCert(

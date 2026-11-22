@@ -96,6 +96,8 @@ void main() {
           );
         } else if (path.endsWith('/tx')) {
           return http.Response('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 200);
+        } else if (path.endsWith('/raw')) {
+          return http.Response.bytes(Uint8List.fromList([0x02, 0x00, 0x00, 0x00, 0xaa]), 200);
         }
         return http.Response('Not found', 404);
       });
@@ -106,6 +108,13 @@ void main() {
       expect(utxos.length, equals(1));
       expect(utxos.first.valueSat, equals(BigInt.from(50000)));
       expect(utxos.first.confirmed, isTrue);
+
+      final rawBytes = await service.getRawTxBytes(
+        'testnet4',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      );
+      expect(rawBytes, equals(Uint8List.fromList([0x02, 0x00, 0x00, 0x00, 0xaa])));
+      expect(() => service.getRawTxBytes('testnet4', 'bad-txid'), throwsFormatException);
 
       final fees = await service.getRecommendedFees('testnet4');
       expect(fees.fastestFee, equals(20));

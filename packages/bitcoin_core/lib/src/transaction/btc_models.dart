@@ -100,6 +100,7 @@ class BtcTxIn {
   final int? accountIndex;
   final int? change; // 0 for external receive, 1 for internal change
   final int? addressIndex;
+  final Uint8List? nonWitnessUtxo;
 
   BtcTxIn({
     required this.previousOutput,
@@ -110,7 +111,10 @@ class BtcTxIn {
     this.accountIndex,
     this.change,
     this.addressIndex,
-  }) : scriptSig = scriptSig ?? Uint8List(0);
+    Uint8List? nonWitnessUtxo,
+  })  : scriptSig = scriptSig ?? Uint8List(0),
+        nonWitnessUtxo =
+            nonWitnessUtxo != null ? Uint8List.fromList(nonWitnessUtxo) : null;
 
   Map<String, dynamic> toJson() => {
         'previousOutput': previousOutput.toJson(),
@@ -121,6 +125,7 @@ class BtcTxIn {
         if (accountIndex != null) 'accountIndex': accountIndex,
         if (change != null) 'change': change,
         if (addressIndex != null) 'addressIndex': addressIndex,
+        if (nonWitnessUtxo != null) 'nonWitnessUtxo': hexEncode(nonWitnessUtxo!),
       };
 
   factory BtcTxIn.fromJson(Map<String, dynamic> json) => BtcTxIn(
@@ -134,6 +139,9 @@ class BtcTxIn {
         accountIndex: (json['accountIndex'] as num?)?.toInt(),
         change: (json['change'] as num?)?.toInt(),
         addressIndex: (json['addressIndex'] as num?)?.toInt(),
+        nonWitnessUtxo: json['nonWitnessUtxo'] != null
+            ? hexDecode(json['nonWitnessUtxo'] as String)
+            : null,
       );
 }
 

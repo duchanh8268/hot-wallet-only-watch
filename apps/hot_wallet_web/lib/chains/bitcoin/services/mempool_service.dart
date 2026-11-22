@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../../../core/models/chain_tx_record.dart';
@@ -10,6 +11,7 @@ class MempoolUtxo {
   final BigInt valueSat;
   final bool confirmed;
   final int? blockHeight;
+  final Uint8List? rawTxBytes;
 
   const MempoolUtxo({
     required this.txid,
@@ -17,6 +19,7 @@ class MempoolUtxo {
     required this.valueSat,
     required this.confirmed,
     this.blockHeight,
+    this.rawTxBytes,
   });
 
   factory MempoolUtxo.fromJson(Map<String, dynamic> json) {
@@ -109,6 +112,20 @@ class MempoolService {
     }
     final list = jsonDecode(resp.body) as List<dynamic>;
     return list.map((e) => MempoolUtxo.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  /// Fetches the raw wire bytes of a Bitcoin transaction for BIP-143 Cold Wallet UTXO verification.
+  Future<Uint8List> getRawTxBytes(String networkId, String txid) async {
+    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(txid)) {
+      throw FormatException('Invalid Bitcoin txid: $txid');
+    }
+    final base = getBaseUrl(networkId);
+    final uri = Uri.parse('$base/tx/$txid/raw');
+    final resp = await _client.get(uri).timeout(const Duration(seconds: 6));
+    if (resp.statusCode != 200) {
+      throw Exception('Mempool raw tx API error (${resp.statusCode}): ${resp.body}');
+    }
+    return Uint8List.fromList(resp.bodyBytes);
   }
 
   /// Fetches address balance and stats.

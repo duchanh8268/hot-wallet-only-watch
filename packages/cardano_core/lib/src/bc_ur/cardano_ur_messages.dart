@@ -101,6 +101,12 @@ class UrUtxoInputContext {
     if (this.txHash.length != 32) {
       throw ArgumentError('txHash must be 32 bytes');
     }
+    if (outputIndex < 0) {
+      throw ArgumentError('outputIndex cannot be negative: $outputIndex');
+    }
+    if (lovelace < BigInt.zero) {
+      throw ArgumentError('UTXO input lovelace cannot be negative: $lovelace');
+    }
   }
 
   CborMap toCbor() {
