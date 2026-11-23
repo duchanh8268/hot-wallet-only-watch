@@ -289,6 +289,9 @@ class CardanoAccountPublicKey {
     return deriveKeyHash(2, index);
   }
 
+  /// Derives the 28-byte DRep key hash at `m/1852'/1815'/accountIndex'/3/index`.
+  Uint8List deriveDRepKeyHash({int index = 0}) => deriveKeyHash(3, index);
+
   Uint8List deriveBaseAddressBytes({
     required int role,
     required int index,

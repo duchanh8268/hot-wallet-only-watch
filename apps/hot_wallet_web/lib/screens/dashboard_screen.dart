@@ -962,7 +962,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: ListTile(
                 dense: true,
                 title: Text(
-                  '${u.utxo.txHash.substring(0, 12)}...#${u.utxo.outputIndex} (${u.derivationRole}/${u.derivationIndex})',
+                  '${u.utxo.txHash.substring(0, 10)}...#${u.utxo.outputIndex} (${u.derivationRole}/${u.derivationIndex} ${u.derivationRole == 1 ? (s.isVi ? 'Tiền thừa' : 'Change') : (s.isVi ? 'Nhận' : 'Ext')})',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                 ),
                 subtitle: Text(

@@ -2,6 +2,7 @@ library bitcoin_core;
 
 export 'src/address/bech32_segwit.dart';
 export 'src/bc_ur/btc_ur_messages.dart';
+export 'src/crypto/btc_account_pub.dart';
 export 'src/crypto/btc_hd_key.dart';
 export 'src/crypto/hash160.dart';
 export 'src/crypto/hash256.dart';

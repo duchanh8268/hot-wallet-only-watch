@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:chain_core_interface/chain_core_interface.dart' show zeroize, zeroizeAll;
 import 'package:crypto/crypto.dart' as crypto;
+import 'btc_account_pub.dart';
 import 'hash160.dart';
 import 'secp256k1_btc.dart';
 
@@ -132,6 +133,29 @@ class BtcHdKey {
   }) {
     final coinType = isTestnet ? 1 : 0;
     return derivePath("84'/$coinType'/$accountIndex'");
+  }
+
+  /// Exports the BIP-84 account-level extended public key (`m/84'/coinType'/account'`).
+  BtcAccountPublicKey exportBip84AccountPublicKey({
+    required int accountIndex,
+    bool isTestnet = false,
+  }) {
+    final acct = deriveBip84Account(
+      accountIndex: accountIndex,
+      isTestnet: isTestnet,
+    );
+    try {
+      return BtcAccountPublicKey(
+        publicKeyCompressed: acct.publicKeyCompressed,
+        chainCode: acct.chainCode,
+        depth: acct.depth,
+        parentFingerprint: acct.parentFingerprint,
+        childNumber: acct.childNumber,
+        isTestnet: isTestnet,
+      );
+    } finally {
+      acct.dispose();
+    }
   }
 
   /// Derives BIP-84 address key `m/84'/coinType'/account'/change/addressIndex`.

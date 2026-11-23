@@ -119,14 +119,19 @@ class _BroadcastFlowScreenState extends State<BroadcastFlowScreen> {
             activeProfile.acctXvkBech32,
           );
           final signReq = widget.buildResult.signRequest;
-          expectedVKeyHashesHex = <String>{
-            for (final u in signReq.utxoInputs)
-              hexEncode(
-                acctPub.deriveKeyHash(u.derivationRole, u.derivationIndex),
-              ),
-            if (signReq.requireStakeWitness)
-              hexEncode(acctPub.deriveStakeKeyHash()),
-          };
+          final allInputsHinted = signReq.utxoInputs.every(
+            (u) => u.derivationRole != null && u.derivationIndex != null,
+          );
+          if (allInputsHinted) {
+            expectedVKeyHashesHex = <String>{
+              for (final u in signReq.utxoInputs)
+                hexEncode(
+                  acctPub.deriveKeyHash(u.derivationRole!, u.derivationIndex!),
+                ),
+              if (signReq.requireStakeWitness)
+                hexEncode(acctPub.deriveStakeKeyHash()),
+            };
+          }
         }
         final assembled = ConwayTxSerializer.assembleSignedTransaction(
           txBodyCbor: widget.buildResult.signRequest.txBodyCbor,
@@ -261,6 +266,21 @@ class _BroadcastFlowScreenState extends State<BroadcastFlowScreen> {
                               style: const TextStyle(fontSize: 12, color: Colors.lightBlueAccent),
                             );
                           },
+                        ),
+                    ],
+                    const SizedBox(height: 6),
+                    Text(
+                      'Inputs: ${widget.buildResult.signRequest.utxoInputs.map((u) => u.hasDerivationHint ? '${u.derivationRole}/${u.derivationIndex}' : 'auto').join(', ')}',
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.white70),
+                    ),
+                    if (widget.buildResult.signRequest.changeOutputs.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      for (final chg in widget.buildResult.signRequest.changeOutputs)
+                        Text(
+                          s.isVi
+                              ? 'Tiền thừa -> Output #${chg.txOutputIndex} (nhánh nội bộ 1/${chg.internalIndex ?? '?'})'
+                              : 'Change -> Output #${chg.txOutputIndex} (internal 1/${chg.internalIndex ?? '?'})',
+                          style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.greenAccent),
                         ),
                     ],
                   ],

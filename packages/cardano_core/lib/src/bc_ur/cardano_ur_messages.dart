@@ -84,8 +84,14 @@ class UrUtxoInputContext {
   final Uint8List addressBytes;
   final BigInt lovelace;
   final MultiAsset multiAssets;
-  final int derivationRole; // 0 = External, 1 = Internal
-  final int derivationIndex;
+  final int? derivationRole; // 0 = External, 1 = Internal, 2 = Stake, 3 = DRep (null = auto-discover)
+  final int? derivationIndex; // null = auto-discover
+
+  bool get hasDerivationHint =>
+      derivationRole != null &&
+      derivationRole! >= 0 &&
+      derivationIndex != null &&
+      derivationIndex! >= 0;
 
   UrUtxoInputContext({
     required Uint8List txHash,
@@ -93,11 +99,13 @@ class UrUtxoInputContext {
     required Uint8List addressBytes,
     required this.lovelace,
     MultiAsset? multiAssets,
-    required this.derivationRole,
-    required this.derivationIndex,
+    int? derivationRole,
+    int? derivationIndex,
   })  : txHash = Uint8List.fromList(txHash),
         addressBytes = Uint8List.fromList(addressBytes),
-        multiAssets = multiAssets ?? MultiAsset.empty {
+        multiAssets = multiAssets ?? MultiAsset.empty,
+        derivationRole = (derivationRole != null && derivationRole >= 0) ? derivationRole : null,
+        derivationIndex = (derivationIndex != null && derivationIndex >= 0) ? derivationIndex : null {
     if (this.txHash.length != 32) {
       throw ArgumentError('txHash must be 32 bytes');
     }
@@ -115,8 +123,6 @@ class UrUtxoInputContext {
       CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(outputIndex)),
       CborMapEntry(CborInt.fromInt(3), CborBytes(addressBytes)),
       CborMapEntry(CborInt.fromInt(4), CborInt(lovelace)),
-      CborMapEntry(CborInt.fromInt(6), CborInt.fromInt(derivationRole)),
-      CborMapEntry(CborInt.fromInt(7), CborInt.fromInt(derivationIndex)),
     ];
 
     if (multiAssets.isNotEmpty) {
@@ -139,6 +145,13 @@ class UrUtxoInputContext {
       entries.add(CborMapEntry(CborInt.fromInt(5), CborMap(policyEntries)));
     }
 
+    if (derivationRole != null) {
+      entries.add(CborMapEntry(CborInt.fromInt(6), CborInt.fromInt(derivationRole!)));
+    }
+    if (derivationIndex != null) {
+      entries.add(CborMapEntry(CborInt.fromInt(7), CborInt.fromInt(derivationIndex!)));
+    }
+
     return CborMap(entries);
   }
 
@@ -157,9 +170,7 @@ class UrUtxoInputContext {
     if (hash is! CborBytes ||
         idx is! CborInt ||
         addr is! CborBytes ||
-        coin is! CborInt ||
-        role is! CborInt ||
-        dIdx is! CborInt) {
+        coin is! CborInt) {
       throw const FormatException('Missing required UTXO context fields');
     }
 
@@ -187,14 +198,17 @@ class UrUtxoInputContext {
       multiAsset = MultiAsset(parsed);
     }
 
+    final parsedRole = (role is CborInt && role.toInt() >= 0) ? role.toInt() : null;
+    final parsedIdx = (dIdx is CborInt && dIdx.toInt() >= 0) ? dIdx.toInt() : null;
+
     return UrUtxoInputContext(
       txHash: hash.bytes,
       outputIndex: idx.toInt(),
       addressBytes: addr.bytes,
       lovelace: coin.value,
       multiAssets: multiAsset,
-      derivationRole: role.toInt(),
-      derivationIndex: dIdx.toInt(),
+      derivationRole: parsedRole,
+      derivationIndex: parsedIdx,
     );
   }
 }
@@ -202,17 +216,22 @@ class UrUtxoInputContext {
 /// Change output reference passed inside `ur:cardano-sign-request`.
 class UrChangeOutputRef {
   final int txOutputIndex;
-  final int internalIndex;
+  final int? internalIndex; // null = auto-discover along role=1
 
   const UrChangeOutputRef({
     required this.txOutputIndex,
-    required this.internalIndex,
+    this.internalIndex,
   });
 
-  CborMap toCbor() => CborMap([
-        CborMapEntry(CborInt.fromInt(1), CborInt.fromInt(txOutputIndex)),
-        CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(internalIndex)),
-      ]);
+  CborMap toCbor() {
+    final entries = <CborMapEntry>[
+      CborMapEntry(CborInt.fromInt(1), CborInt.fromInt(txOutputIndex)),
+    ];
+    if (internalIndex != null && internalIndex! >= 0) {
+      entries.add(CborMapEntry(CborInt.fromInt(2), CborInt.fromInt(internalIndex!)));
+    }
+    return CborMap(entries);
+  }
 
   factory UrChangeOutputRef.fromCbor(CborValue val) {
     if (val is! CborMap) {
@@ -220,12 +239,12 @@ class UrChangeOutputRef {
     }
     final outIdx = val.getByIntKey(1);
     final intIdx = val.getByIntKey(2);
-    if (outIdx is! CborInt || intIdx is! CborInt) {
-      throw const FormatException('Missing ChangeOutputRef fields');
+    if (outIdx is! CborInt) {
+      throw const FormatException('Missing ChangeOutputRef txOutputIndex');
     }
     return UrChangeOutputRef(
       txOutputIndex: outIdx.toInt(),
-      internalIndex: intIdx.toInt(),
+      internalIndex: (intIdx is CborInt && intIdx.toInt() >= 0) ? intIdx.toInt() : null,
     );
   }
 }
@@ -241,6 +260,7 @@ class CardanoSignRequestUr {
   final List<UrUtxoInputContext> utxoInputs;
   final List<UrChangeOutputRef> changeOutputs;
   final bool requireStakeWitness;
+  final int? accountIndex; // Optional CIP-1852 account index hint (key 8)
 
   CardanoSignRequestUr({
     this.version = 1,
@@ -250,6 +270,7 @@ class CardanoSignRequestUr {
     required this.utxoInputs,
     required this.changeOutputs,
     required this.requireStakeWitness,
+    this.accountIndex,
   })  : requestId = Uint8List.fromList(requestId),
         txBodyCbor = Uint8List.fromList(txBodyCbor) {
     if (this.requestId.length != 16) {
@@ -258,7 +279,7 @@ class CardanoSignRequestUr {
   }
 
   Uint8List toCborBytes() {
-    return CborMap([
+    final entries = <CborMapEntry>[
       CborMapEntry(CborInt.fromInt(1), CborInt.fromInt(version)),
       CborMapEntry(CborInt.fromInt(2), CborBytes(requestId)),
       CborMapEntry(CborInt.fromInt(3), CborInt.fromInt(network.urCode)),
@@ -272,7 +293,11 @@ class CardanoSignRequestUr {
         CborArray([for (final c in changeOutputs) c.toCbor()]),
       ),
       CborMapEntry(CborInt.fromInt(7), CborBool(requireStakeWitness)),
-    ]).encode();
+    ];
+    if (accountIndex != null && accountIndex! >= 0) {
+      entries.add(CborMapEntry(CborInt.fromInt(8), CborInt.fromInt(accountIndex!)));
+    }
+    return CborMap(entries).encode();
   }
 
   UrEncoder createEncoder({int maxFragmentLen = 90}) => UrEncoder(
@@ -293,6 +318,7 @@ class CardanoSignRequestUr {
     final inputs = root.getByIntKey(5);
     final changes = root.getByIntKey(6);
     final reqStake = root.getByIntKey(7);
+    final acctIdx = root.getByIntKey(8);
 
     if (ver is! CborInt ||
         reqId is! CborBytes ||
@@ -316,6 +342,7 @@ class CardanoSignRequestUr {
         for (final c in changes.items) UrChangeOutputRef.fromCbor(c),
       ],
       requireStakeWitness: reqStake.value,
+      accountIndex: (acctIdx is CborInt && acctIdx.toInt() >= 0) ? acctIdx.toInt() : null,
     );
   }
 }

@@ -100,6 +100,7 @@ class ConwayTxBuilder {
       if (keepRemainingTokens) {
         return _buildSendMaxAda(
           network: network,
+          accountIndex: profile.accountIndex,
           acctKey: acctKey,
           syncState: syncState,
           recipientBytes: decodedRecipient.rawBytes,
@@ -110,6 +111,7 @@ class ConwayTxBuilder {
       }
       return _buildSendMax(
         network: network,
+        accountIndex: profile.accountIndex,
         acctKey: acctKey,
         syncState: syncState,
         recipientBytes: decodedRecipient.rawBytes,
@@ -329,6 +331,7 @@ class ConwayTxBuilder {
                 (actualFee - exactFee) <= BigInt.from(200))) {
           return _finalizeResult(
             network: network,
+            accountIndex: profile.accountIndex,
             txBody: txBody,
             selectedInputs: selected,
             changeOutputs: changeRefs,
@@ -342,6 +345,7 @@ class ConwayTxBuilder {
             (surplus == BigInt.zero ? actualFee == exactFee : true)) {
           return _finalizeResult(
             network: network,
+            accountIndex: profile.accountIndex,
             txBody: txBody,
             selectedInputs: selected,
             changeOutputs: changeRefs,
@@ -360,6 +364,7 @@ class ConwayTxBuilder {
 
   static TxBuildResult _buildSendMaxAda({
     required CardanoNetwork network,
+    required int accountIndex,
     required CardanoAccountPublicKey acctKey,
     required WalletSyncState syncState,
     required Uint8List recipientBytes,
@@ -485,6 +490,7 @@ class ConwayTxBuilder {
         if (fee == exactFee) {
           return _finalizeResult(
             network: network,
+            accountIndex: accountIndex,
             txBody: txBody,
             selectedInputs: selected,
             changeOutputs: changeRefs,
@@ -515,6 +521,7 @@ class ConwayTxBuilder {
 
   static TxBuildResult _buildSendMax({
     required CardanoNetwork network,
+    required int accountIndex,
     required CardanoAccountPublicKey acctKey,
     required WalletSyncState syncState,
     required Uint8List recipientBytes,
@@ -567,6 +574,7 @@ class ConwayTxBuilder {
       if (fee == exactFee) {
         return _finalizeResult(
           network: network,
+          accountIndex: accountIndex,
           txBody: txBody,
           selectedInputs: selected,
           changeOutputs: const [],
@@ -742,6 +750,7 @@ class ConwayTxBuilder {
       if (fee == exactFee) {
         return _finalizeResult(
           network: network,
+          accountIndex: profile.accountIndex,
           txBody: txBody,
           selectedInputs: selected,
           changeOutputs: [
@@ -789,6 +798,7 @@ class ConwayTxBuilder {
 
   static TxBuildResult _finalizeResult({
     required CardanoNetwork network,
+    required int accountIndex,
     required ConwayTxBody txBody,
     required List<DerivedUtxo> selectedInputs,
     required List<UrChangeOutputRef> changeOutputs,
@@ -800,6 +810,7 @@ class ConwayTxBuilder {
     final req = CardanoSignRequestUr(
       requestId: _randomRequestId(),
       network: network,
+      accountIndex: accountIndex,
       txBodyCbor: bodyBytes,
       utxoInputs: [
         for (final u in selectedInputs)

@@ -22,6 +22,9 @@ class BtcWatchOnlyProfile {
     this.accountXpub,
   });
 
+  bool get hasAccountXpub =>
+      accountXpub != null && accountXpub!.trim().isNotEmpty;
+
   BtcWatchOnlyProfile copyWith({
     String? name,
     String? networkId,

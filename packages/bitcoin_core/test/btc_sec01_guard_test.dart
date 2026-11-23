@@ -496,5 +496,190 @@ void main() {
       key1.dispose();
       otherKey.dispose();
     });
+
+    test('BtcAccountPublicKey matches private BIP-84 derivation for change 0 and 1 across round-trip', () {
+      final master = BtcHdKey.fromSeed(Bip39.mnemonicToSeed(mnemonic));
+      try {
+        for (final isTestnet in [false, true]) {
+          final acctPub = master.exportBip84AccountPublicKey(
+            accountIndex: 1,
+            isTestnet: isTestnet,
+          );
+          final extStr = acctPub.toExtendedKey();
+          expect(extStr.startsWith(isTestnet ? 'vpub' : 'zpub'), isTrue);
+          final decoded = BtcAccountPublicKey.fromExtendedKey(extStr);
+
+          for (final chg in [0, 1]) {
+            for (final idx in [0, 3, 12]) {
+              final priv = master.deriveBip84Address(
+                accountIndex: 1,
+                change: chg,
+                addressIndex: idx,
+                isTestnet: isTestnet,
+              );
+              try {
+                expect(
+                  decoded.derivePubKeyHash(chg, idx),
+                  equals(priv.pubKeyHash),
+                );
+                expect(
+                  decoded.deriveP2wpkhAddress(change: chg, addressIndex: idx),
+                  equals(
+                    Bech32Segwit.encodeP2wpkh(
+                      hrp: isTestnet ? 'tb' : 'bc',
+                      program20: priv.pubKeyHash,
+                    ),
+                  ),
+                );
+              } finally {
+                priv.dispose();
+              }
+            }
+          }
+        }
+      } finally {
+        master.dispose();
+      }
+    });
+
+    test('Hybrid auto-discovery resolves change 0 & 1 inputs and change output without hints', () {
+      final master = BtcHdKey.fromSeed(Bip39.mnemonicToSeed(mnemonic));
+      final keyExt = master.deriveBip84Address(accountIndex: 0, change: 0, addressIndex: 3);
+      final keyChg = master.deriveBip84Address(accountIndex: 0, change: 1, addressIndex: 4);
+      final keyOutChg = master.deriveBip84Address(accountIndex: 0, change: 1, addressIndex: 5);
+
+      final funded0 = makeFundingUtxo(
+        pubKeyHash20: keyExt.pubKeyHash,
+        valueSat: BigInt.from(150000),
+        change: 0,
+        addressIndex: 3,
+        seedByte: 0x81,
+      );
+      final funded1 = makeFundingUtxo(
+        pubKeyHash20: keyChg.pubKeyHash,
+        valueSat: BigInt.from(250000),
+        change: 1,
+        addressIndex: 4,
+        seedByte: 0x82,
+      );
+
+      final changeAddr = Bech32Segwit.encodeP2wpkh(hrp: 'bc', program20: keyOutChg.pubKeyHash);
+      const destAddr = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+
+      // Build tx without change/addressIndex/changeIndex hints
+      final tx = BtcTransaction(
+        version: 2,
+        inputs: [
+          BtcTxIn(previousOutput: funded0.outpoint, nonWitnessUtxo: funded0.rawTx),
+          BtcTxIn(previousOutput: funded1.outpoint, nonWitnessUtxo: funded1.rawTx),
+        ],
+        outputs: [
+          BtcTxOut.fromAddress(valueSat: BigInt.from(300000), address: destAddr),
+          BtcTxOut.fromAddress(valueSat: BigInt.from(98000), address: changeAddr, isChange: true),
+        ],
+      );
+
+      final req = BtcSignRequestUr(
+        requestId: Uint8List.fromList(List.filled(16, 0x55)),
+        chain: 'bitcoin',
+        network: 'mainnet',
+        transaction: tx,
+        accountIndex: 0,
+        feeSat: BigInt.from(2000),
+      );
+
+      final cache = BtcHdDiscoveryCache();
+      final result = BtcSec01Guard.auditDetailed(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet',
+        candidateAccountIndices: const [0, 1],
+        discoveryCache: cache,
+      );
+
+      expect(result.verdict.isApproved, isTrue);
+      expect(result.resolvedAccountIndex, equals(0));
+      expect(result.resolvedInputs[0].change, equals(0));
+      expect(result.resolvedInputs[0].addressIndex, equals(3));
+      expect(result.resolvedInputs[0].wasAutoDiscovered, isTrue);
+      expect(result.resolvedInputs[1].change, equals(1));
+      expect(result.resolvedInputs[1].addressIndex, equals(4));
+      expect(result.resolvedChangeIndices[1], equals(5));
+
+      final resp = BtcSec01Guard.auditAndSign(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet',
+        candidateAccountIndices: const [0, 1],
+        discoveryCache: cache,
+      );
+      expect(resp.witnesses.length, equals(2));
+
+      master.dispose();
+      keyExt.dispose();
+      keyChg.dispose();
+      keyOutChg.dispose();
+    });
+
+    test('Multi-account auto-resolution signs Account #2 while UI is on Account #0', () {
+      final master = BtcHdKey.fromSeed(Bip39.mnemonicToSeed(mnemonic));
+      final keyAcct2 = master.deriveBip84Address(accountIndex: 2, change: 1, addressIndex: 2);
+      final keyAcct2Chg = master.deriveBip84Address(accountIndex: 2, change: 1, addressIndex: 3);
+
+      final funded = makeFundingUtxo(
+        pubKeyHash20: keyAcct2.pubKeyHash,
+        valueSat: BigInt.from(200000),
+        accountIndex: 2,
+        change: 1,
+        addressIndex: 2,
+        seedByte: 0x91,
+      );
+      final changeAddr = Bech32Segwit.encodeP2wpkh(hrp: 'bc', program20: keyAcct2Chg.pubKeyHash);
+      const destAddr = 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4';
+
+      final build = BtcTxBuilder.buildP2wpkhTx(
+        availableUtxos: [funded.utxo],
+        recipientAddress: destAddr,
+        amountSat: BigInt.from(150000),
+        changeAddress: changeAddr,
+        changeIndex: 3,
+        feeRateSatPerVb: 5,
+      );
+
+      final req = BtcSignRequestUr(
+        requestId: Uint8List.fromList(List.filled(16, 0x66)),
+        chain: 'bitcoin',
+        network: 'mainnet',
+        transaction: build.transaction,
+        accountIndex: 2,
+        feeSat: build.feeSat,
+      );
+
+      final res = BtcSec01Guard.auditDetailed(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet',
+        candidateAccountIndices: const [0, 2],
+      );
+      expect(res.verdict.isApproved, isTrue);
+      expect(res.resolvedAccountIndex, equals(2));
+
+      final signResp = BtcSec01Guard.auditAndSign(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet',
+        candidateAccountIndices: const [0, 2],
+      );
+      expect(signResp.witnesses.length, equals(1));
+      expect(signResp.witnesses[0].items[1], equals(keyAcct2.publicKeyCompressed));
+
+      master.dispose();
+      keyAcct2.dispose();
+      keyAcct2Chg.dispose();
+    });
   });
 }

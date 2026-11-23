@@ -66,6 +66,10 @@ class BitcoinHotPlugin implements IHotChainPlugin {
     final hrp = isTestnet ? 'tb' : 'bc';
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final masterHd = BtcHdKey.fromSeed(seed);
+    final acctPub = masterHd.exportBip84AccountPublicKey(
+      accountIndex: accountIndex,
+      isTestnet: isTestnet,
+    );
     final childKey = masterHd.deriveBip84Address(
       accountIndex: accountIndex,
       change: 0,
@@ -85,6 +89,7 @@ class BitcoinHotPlugin implements IHotChainPlugin {
         accountIndex: accountIndex,
         receiveAddress: address,
         masterFingerprint: masterHd.fingerprint,
+        accountXpub: acctPub.toExtendedKey(),
         label: label,
       ).toUr();
 

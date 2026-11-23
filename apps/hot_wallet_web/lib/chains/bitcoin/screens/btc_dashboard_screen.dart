@@ -13,6 +13,7 @@ import '../../../widgets/recent_txs_section.dart';
 import '../../../widgets/wallet_profiles_dialog.dart';
 import '../../../widgets/web_qr_scanner.dart';
 import '../bitcoin_hot_plugin.dart';
+import '../services/btc_hd_sync_service.dart';
 import '../services/mempool_service.dart';
 
 class BtcDashboardScreen extends StatefulWidget {
@@ -182,19 +183,34 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
       return;
     }
 
+    if (!active.hasAccountXpub) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isVi
+                ? 'Tài khoản nhập bằng địa chỉ đơn chỉ hỗ trợ xem số dư (Read-Only). Hãy quét lại mã QR ur:btc-account (có xpub) từ Ví Lạnh để gửi BTC và nhận tiền thối chuẩn BIP-84 (change=1).'
+                : 'Single-address import is view-only. Re-import ur:btc-account (with xpub) from Cold Wallet to send BTC with BIP-84 change=1.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final toAddrCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
     int feeRate = 10; // 10 sat/vB default
     String? dialogError;
 
-    final utxoList = (appState.btcAccountState?['utxos'] as List<dynamic>?)
-            ?.whereType<MempoolUtxo>()
-            .toList() ??
-        <MempoolUtxo>[];
+    final syncState = appState.btcSyncState;
+    final derivedUtxos = syncState?.utxos ??
+        ((appState.btcAccountState?['derivedUtxos'] as List<dynamic>?)
+                ?.whereType<BtcDerivedUtxo>()
+                .toList() ??
+            <BtcDerivedUtxo>[]);
 
-    final totalBalanceSat = utxoList.fold<BigInt>(
+    final totalBalanceSat = derivedUtxos.fold<BigInt>(
       BigInt.zero,
-      (sum, u) => sum + u.valueSat,
+      (sum, u) => sum + u.utxo.valueSat,
     );
 
     showDialog<void>(
@@ -224,7 +240,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                           style: const TextStyle(fontSize: 11, color: HotTheme.textSecondary),
                         ),
                         Text(
-                          '${_formatBtc(totalBalanceSat)} BTC (${_formatSats(totalBalanceSat)} sats) • ${utxoList.length} UTXOs',
+                          '${_formatBtc(totalBalanceSat)} BTC (${_formatSats(totalBalanceSat)} sats) • ${derivedUtxos.length} UTXOs',
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                       ],
@@ -319,26 +335,35 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                   final amtSat = BigInt.from((amtBtc * 1e8).round());
                   if (amtSat > totalBalanceSat) throw Exception('Số dư không đủ để thực hiện giao dịch');
 
-                  if (utxoList.isEmpty) {
+                  if (derivedUtxos.isEmpty) {
                     throw Exception('Không có UTXO khả dụng để tạo giao dịch');
                   }
 
-                  // Change address: standard internal derivation address matching Cold Wallet
-                  final changeAddress = active.receiveAddress;
+                  final networkId = appState.activeChainNetwork.id;
+                  final isTestnet = appState.activeChainNetwork.isTestnet;
+                  final acctPub = BtcAccountPublicKey.fromExtendedKey(active.accountXpub!);
+                  final changeIdx = syncState?.nextUnusedChangeIndex ?? 0;
+                  final changeAddress = (syncState != null && syncState.nextUnusedChangeAddress.isNotEmpty)
+                      ? syncState.nextUnusedChangeAddress
+                      : acctPub.deriveP2wpkhAddress(
+                          change: 1,
+                          addressIndex: changeIdx,
+                          testnetOverride: isTestnet,
+                        );
 
                   // Fetch nonWitnessUtxo raw previous transactions for BIP-143 SEC-01 verification
-                  final networkId = appState.activeChainNetwork.id;
                   final btcInputs = <BtcUtxo>[];
-                  for (final u in utxoList) {
+                  for (final d in derivedUtxos) {
+                    final u = d.utxo;
                     final rawPrevTx = u.rawTxBytes ??
                         await BitcoinHotPlugin.instance.mempoolService.getRawTxBytes(networkId, u.txid);
                     btcInputs.add(
                       BtcUtxo(
                         outpoint: OutPoint(txid: u.txid, vout: u.vout),
                         valueSat: u.valueSat,
-                        accountIndex: active.accountIndex,
-                        change: 0,
-                        addressIndex: 0,
+                        accountIndex: d.accountIndex,
+                        change: d.change,
+                        addressIndex: d.addressIndex,
                         nonWitnessUtxo: rawPrevTx,
                       ),
                     );
@@ -349,7 +374,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                     recipientAddress: recipient,
                     amountSat: amtSat,
                     changeAddress: changeAddress,
-                    changeIndex: 0,
+                    changeIndex: changeIdx,
                     feeRateSatPerVb: feeRate,
                   );
 
@@ -376,6 +401,9 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                     recipientAddress: recipient,
                     feeRateSatPerVb: feeRate,
                     buildResult: buildResult,
+                    accountIndex: active.accountIndex,
+                    changeIndex: changeIdx,
+                    isTestnet: isTestnet,
                   );
                 } catch (e) {
                   if (ctx.mounted) {
@@ -397,6 +425,9 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
     required String recipientAddress,
     required int feeRateSatPerVb,
     required BtcTxBuildResult buildResult,
+    required int accountIndex,
+    required int changeIndex,
+    required bool isTestnet,
   }) {
     showDialog<void>(
       context: context,
@@ -440,7 +471,19 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                       if (buildResult.changeSat != null && buildResult.changeSat! > BigInt.zero) ...[
                         const SizedBox(height: 6),
                         _buildInfoRow('Tiền thối về ví:', '${_formatSats(buildResult.changeSat!)} sats'),
+                        const SizedBox(height: 6),
+                        _buildInfoRow(
+                          'Nhánh tiền thối:',
+                          "m/84'/${isTestnet ? 1 : 0}'/$accountIndex'/1/$changeIndex",
+                        ),
                       ],
+                      const SizedBox(height: 6),
+                      _buildInfoRow(
+                        'Nhánh Inputs:',
+                        buildResult.transaction.inputs
+                            .map((i) => '${i.change ?? '?'}/${i.addressIndex ?? '?'}')
+                            .join(', '),
+                      ),
                       const SizedBox(height: 6),
                       _buildInfoRow('Kích thước vSize:', '${buildResult.estimatedVSize} vB'),
                     ],
@@ -742,18 +785,36 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
   Widget build(BuildContext context) {
     final active = appState.activeBtcProfile;
     final state = appState.btcAccountState;
+    final syncState = appState.btcSyncState;
     final loading = appState.btcLoading;
     final error = appState.btcError;
+    final isTestnet = appState.activeChainNetwork.isTestnet;
 
-    final utxoList = (state?['utxos'] as List<dynamic>?)
-            ?.whereType<MempoolUtxo>()
-            .toList() ??
-        <MempoolUtxo>[];
+    final derivedUtxos = syncState?.utxos ??
+        ((state?['derivedUtxos'] as List<dynamic>?)
+                ?.whereType<BtcDerivedUtxo>()
+                .toList() ??
+            [
+              for (final u in ((state?['utxos'] as List<dynamic>?)?.whereType<MempoolUtxo>() ?? const <MempoolUtxo>[]))
+                BtcDerivedUtxo(
+                  utxo: u,
+                  accountIndex: active?.accountIndex ?? 0,
+                  change: 0,
+                  addressIndex: 0,
+                  address: active?.receiveAddress ?? '',
+                ),
+            ]);
 
-    final totalBalanceSat = utxoList.fold<BigInt>(
+    final totalBalanceSat = derivedUtxos.fold<BigInt>(
       BigInt.zero,
-      (sum, u) => sum + u.valueSat,
+      (sum, u) => sum + u.utxo.valueSat,
     );
+    final displayedReceiveAddr = (syncState != null && syncState.isHdSynced)
+        ? syncState.nextUnusedExternalAddress
+        : (active?.receiveAddress ?? '');
+    final displayedReceiveIdx = (syncState != null && syncState.isHdSynced)
+        ? syncState.nextUnusedExternalIndex
+        : 0;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -799,16 +860,41 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                 ),
                 if (active != null) ...[
                   const SizedBox(height: 8),
-                  Text(
-                    'Đường dẫn BIP-84: m/84\'/${appState.activeChainNetwork.isTestnet ? 1 : 0}\'/${active.accountIndex}\'/0/0',
-                    style: const TextStyle(fontSize: 11, color: HotTheme.textSecondary),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          "Đường dẫn BIP-84: m/84'/${isTestnet ? 1 : 0}'/${active.accountIndex}'/0/$displayedReceiveIdx",
+                          style: const TextStyle(fontSize: 11, color: HotTheme.textSecondary),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: active.hasAccountXpub
+                              ? HotTheme.success.withValues(alpha: 0.15)
+                              : HotTheme.warning.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          active.hasAccountXpub
+                              ? (isVi ? 'HD 0/* & 1/*' : 'HD 0/* & 1/*')
+                              : (isVi ? 'Chỉ xem (1 địa chỉ)' : 'Read-Only'),
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: active.hasAccountXpub ? HotTheme.success : HotTheme.warning,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   Row(
                     children: [
                       Expanded(
                         child: Text(
-                          active.receiveAddress,
+                          displayedReceiveAddr,
                           style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -820,7 +906,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                         constraints: const BoxConstraints(),
                         tooltip: isVi ? 'Sao chép' : 'Copy',
                         onPressed: () {
-                          Clipboard.setData(ClipboardData(text: active.receiveAddress));
+                          Clipboard.setData(ClipboardData(text: displayedReceiveAddr));
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text(isVi ? 'Đã sao chép địa chỉ' : 'Address copied')),
                           );
@@ -828,6 +914,23 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                       ),
                     ],
                   ),
+                  if (!active.hasAccountXpub) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: HotTheme.warning.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: HotTheme.warning.withValues(alpha: 0.5)),
+                      ),
+                      child: Text(
+                        isVi
+                            ? 'Tài khoản này chưa có xpub nên chỉ xem được 1 địa chỉ (0/0) và không thể gửi BTC. Hãy quét lại ur:btc-account từ Ví Lạnh để bật HD change=1.'
+                            : 'This profile has no xpub (single-address view-only). Re-import ur:btc-account from Cold Wallet to enable HD change=1 & sending.',
+                        style: const TextStyle(fontSize: 11, color: HotTheme.warning),
+                      ),
+                    ),
+                  ],
                   const Divider(height: 24),
                   const Text('Tổng số dư Bitcoin:', style: TextStyle(fontSize: 12, color: HotTheme.textSecondary)),
                   const SizedBox(height: 4),
@@ -917,7 +1020,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                isVi ? 'Danh Sách UTXOs (${utxoList.length})' : 'UTXO Outputs (${utxoList.length})',
+                isVi ? 'Danh Sách UTXOs (${derivedUtxos.length})' : 'UTXO Outputs (${derivedUtxos.length})',
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               IconButton(
@@ -945,7 +1048,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
               ),
               child: Text(error, style: const TextStyle(color: HotTheme.danger, fontSize: 12)),
             )
-          else if (utxoList.isEmpty)
+          else if (derivedUtxos.isEmpty)
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
@@ -956,8 +1059,8 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
               child: Center(
                 child: Text(
                   isVi
-                      ? 'Chưa có UTXO nào trên địa chỉ này hoặc đang chờ xác nhận.'
-                      : 'No confirmed UTXOs found on this address.',
+                      ? 'Chưa có UTXO nào trên tài khoản này hoặc đang chờ xác nhận.'
+                      : 'No confirmed UTXOs found on this account.',
                   style: const TextStyle(color: HotTheme.textSecondary, fontSize: 12),
                   textAlign: TextAlign.center,
                 ),
@@ -967,10 +1070,12 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
             ListView.separated(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: utxoList.length,
+              itemCount: derivedUtxos.length,
               separatorBuilder: (c, i) => const SizedBox(height: 8),
               itemBuilder: (ctx, i) {
-                final u = utxoList[i];
+                final d = derivedUtxos[i];
+                final u = d.utxo;
+                final isChangeBranch = d.change == 1;
                 return Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -987,7 +1092,7 @@ class _BtcDashboardScreenState extends State<BtcDashboardScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '${u.txid.substring(0, 8)}...${u.txid.substring(u.txid.length - 8)}:${u.vout}',
+                              '${u.txid.substring(0, 8)}...${u.txid.substring(u.txid.length - 8)}:${u.vout} • ${isChangeBranch ? (isVi ? 'Tiền thối' : 'Change') : (isVi ? 'Nhận' : 'External')} (${d.change}/${d.addressIndex})',
                               style: const TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 2),

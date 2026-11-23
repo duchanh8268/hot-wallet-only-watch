@@ -741,4 +741,237 @@ void main() {
       );
     });
   });
+
+  group('SEC-01 Multi-Role & Hybrid Auto-Discovery', () {
+    test('Auto-discovers role 0, role 1 (change), role 2, role 3 inputs and role 1 change when hints omitted', () {
+      final addr0 = walletKey.deriveBaseAddressBytes(
+        role: 0,
+        index: 2,
+        network: CardanoNetwork.preprod,
+      );
+      final addr1 = walletKey.deriveBaseAddressBytes(
+        role: 1,
+        index: 5,
+        network: CardanoNetwork.preprod,
+      );
+      final addr3 = walletKey.exportAccountPublicKey().deriveEnterpriseAddressBytes(
+        role: 3,
+        index: 0,
+        network: CardanoNetwork.preprod,
+      );
+      final recipientAddr = attackerKey.deriveBaseAddressBytes(
+        role: 0,
+        index: 0,
+        network: CardanoNetwork.preprod,
+      );
+      final changeAddr = walletKey.deriveBaseAddressBytes(
+        role: 1,
+        index: 6,
+        network: CardanoNetwork.preprod,
+      );
+
+      final txHash0 = Uint8List.fromList(List<int>.filled(32, 0x11));
+      final txHash1 = Uint8List.fromList(List<int>.filled(32, 0x22));
+      final txHash3 = Uint8List.fromList(List<int>.filled(32, 0x33));
+      final fee = BigInt.from(200000);
+
+      final txBody = ConwayTxBody(
+        inputs: [
+          TxInput(txHash: txHash0, index: 0),
+          TxInput(txHash: txHash1, index: 1),
+          TxInput(txHash: txHash3, index: 0),
+        ],
+        outputs: [
+          TxOutput(addressBytes: recipientAddr, lovelace: BigInt.from(5000000)),
+          TxOutput(addressBytes: changeAddr, lovelace: BigInt.from(9800000)),
+        ],
+        fee: fee,
+        ttl: 90000000,
+        networkId: 0,
+      );
+
+      final rawReq = CardanoSignRequestUr(
+        requestId: Uint8List.fromList(List<int>.generate(16, (i) => i + 10)),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(txBody),
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: txHash0,
+            outputIndex: 0,
+            addressBytes: addr0,
+            lovelace: BigInt.from(5000000),
+          ),
+          UrUtxoInputContext(
+            txHash: txHash1,
+            outputIndex: 1,
+            addressBytes: addr1,
+            lovelace: BigInt.from(5000000),
+          ),
+          UrUtxoInputContext(
+            txHash: txHash3,
+            outputIndex: 0,
+            addressBytes: addr3,
+            lovelace: BigInt.from(5000000),
+          ),
+        ],
+        changeOutputs: const [
+          UrChangeOutputRef(txOutputIndex: 1),
+        ],
+        requireStakeWitness: false,
+      );
+
+      // Round-trip CBOR without hints
+      final parsedReq = CardanoSignRequestUr.fromCborBytes(rawReq.toCborBytes());
+      expect(parsedReq.utxoInputs[0].hasDerivationHint, isFalse);
+      expect(parsedReq.changeOutputs[0].internalIndex, isNull);
+
+      final cache = CardanoHdDiscoveryCache();
+      final report = Sec01Guard.audit(
+        request: parsedReq,
+        masterKey: walletKey,
+        expectedNetwork: CardanoNetwork.preprod,
+        discoveryCache: cache,
+      );
+
+      expect(report.resolvedAccountIndex, 0);
+      expect(report.auditedInputs[0].derivationRole, 0);
+      expect(report.auditedInputs[0].derivationIndex, 2);
+      expect(report.auditedInputs[0].wasAutoDiscovered, isTrue);
+      expect(report.auditedInputs[1].derivationRole, 1);
+      expect(report.auditedInputs[1].derivationIndex, 5);
+      expect(report.auditedInputs[2].derivationRole, 3);
+      expect(report.auditedInputs[2].derivationIndex, 0);
+      expect(report.verifiedChangeOutputs[0].changeInternalIndex, 6);
+      expect(report.verifiedChangeOutputs[0].wasAutoDiscovered, isTrue);
+
+      final resp = Sec01Guard.auditAndSign(
+        request: parsedReq,
+        masterKey: walletKey,
+        expectedNetwork: CardanoNetwork.preprod,
+        discoveryCache: cache,
+      );
+      expect(resp.vkeyWitnesses.length, 3);
+      final txHash = ConwayTxSerializer.computeTxBodyHash(parsedReq.txBodyCbor);
+      for (final w in resp.vkeyWitnesses) {
+        expect(Ed25519.verify(w.vkey, txHash, w.signature), isTrue);
+      }
+    });
+
+    test('Auto-resolves Account #2 when Cold Wallet UI is on Account #0', () {
+      final acct2In = walletKey.deriveBaseAddressBytes(
+        accountIndex: 2,
+        role: 1,
+        index: 4,
+        network: CardanoNetwork.preprod,
+      );
+      final recipientAddr = attackerKey.deriveBaseAddressBytes(
+        role: 0,
+        index: 0,
+        network: CardanoNetwork.preprod,
+      );
+      final acct2Change = walletKey.deriveBaseAddressBytes(
+        accountIndex: 2,
+        role: 1,
+        index: 5,
+        network: CardanoNetwork.preprod,
+      );
+
+      final txHash = Uint8List.fromList(List<int>.filled(32, 0x88));
+      final txBody = ConwayTxBody(
+        inputs: [TxInput(txHash: txHash, index: 0)],
+        outputs: [
+          TxOutput(addressBytes: recipientAddr, lovelace: BigInt.from(3000000)),
+          TxOutput(addressBytes: acct2Change, lovelace: BigInt.from(6820000)),
+        ],
+        fee: BigInt.from(180000),
+        networkId: 0,
+      );
+
+      final req = CardanoSignRequestUr(
+        requestId: Uint8List.fromList(List<int>.filled(16, 0x42)),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(txBody),
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: txHash,
+            outputIndex: 0,
+            addressBytes: acct2In,
+            lovelace: BigInt.from(10000000),
+            derivationRole: 1,
+            derivationIndex: 4,
+          ),
+        ],
+        changeOutputs: const [
+          UrChangeOutputRef(txOutputIndex: 1, internalIndex: 5),
+        ],
+        requireStakeWitness: false,
+      );
+
+      final report = Sec01Guard.audit(
+        request: req,
+        masterKey: walletKey,
+        expectedNetwork: CardanoNetwork.preprod,
+        accountIndex: 0,
+        candidateAccountIndices: const [0, 2],
+      );
+      expect(report.resolvedAccountIndex, 2);
+
+      final resp = Sec01Guard.auditAndSign(
+        request: req,
+        masterKey: walletKey,
+        expectedNetwork: CardanoNetwork.preprod,
+        accountIndex: 0,
+        candidateAccountIndices: const [0, 2],
+      );
+      final acctPub2 = walletKey.exportAccountPublicKey(accountIndex: 2);
+      final expectedHash = hexEncode(acctPub2.deriveKeyHash(1, 4));
+      expect(hexEncode(blake2b224(resp.vkeyWitnesses.first.vkey)), expectedHash);
+    });
+
+    test('Preserves optional accountIndex in CardanoSignRequestUr CBOR round-trip', () {
+      final txBody = ConwayTxBody(
+        inputs: [TxInput(txHash: Uint8List(32), index: 0)],
+        outputs: [
+          TxOutput(
+            addressBytes: walletKey.deriveBaseAddressBytes(
+              accountIndex: 3,
+              role: 1,
+              index: 0,
+              network: CardanoNetwork.preprod,
+            ),
+            lovelace: BigInt.from(1820000),
+          ),
+        ],
+        fee: BigInt.from(180000),
+        networkId: 0,
+      );
+
+      final req = CardanoSignRequestUr(
+        requestId: Uint8List(16),
+        network: CardanoNetwork.preprod,
+        txBodyCbor: ConwayTxSerializer.encodeTxBody(txBody),
+        utxoInputs: [
+          UrUtxoInputContext(
+            txHash: Uint8List(32),
+            outputIndex: 0,
+            addressBytes: walletKey.deriveBaseAddressBytes(
+              accountIndex: 3,
+              role: 0,
+              index: 0,
+              network: CardanoNetwork.preprod,
+            ),
+            lovelace: BigInt.from(2000000),
+            derivationRole: 0,
+            derivationIndex: 0,
+          ),
+        ],
+        changeOutputs: const [UrChangeOutputRef(txOutputIndex: 0, internalIndex: 0)],
+        requireStakeWitness: false,
+        accountIndex: 3,
+      );
+
+      final decoded = CardanoSignRequestUr.fromCborBytes(req.toCborBytes());
+      expect(decoded.accountIndex, 3);
+    });
+  });
 }

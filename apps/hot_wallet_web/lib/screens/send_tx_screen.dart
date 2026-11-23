@@ -772,6 +772,18 @@ class _SendTxScreenState extends State<SendTxScreen> {
                       s.changeMinAdaLabel,
                       '${formatAda(preview.buildResult!.changeMinAda!)} ADA',
                     ),
+                  if (preview.buildResult != null &&
+                      preview.buildResult!.signRequest.changeOutputs.isNotEmpty)
+                    Builder(
+                      builder: (_) {
+                        final chg = preview.buildResult!.signRequest.changeOutputs.first;
+                        final chgOut = preview.buildResult!.txBody.outputs[chg.txOutputIndex];
+                        return _previewRow(
+                          s.isVi ? 'Tiền thừa trả về (role=1)' : 'Change Return (role=1)',
+                          '${formatAda(chgOut.lovelace)} ADA (${profile?.accountIndex ?? 0}/1/${chg.internalIndex ?? 0})',
+                        );
+                      },
+                    ),
                   if (preview.buildResult != null && sentOutputLovelace != null)
                     _previewRow(
                       s.totalAdaDeductedLabel,

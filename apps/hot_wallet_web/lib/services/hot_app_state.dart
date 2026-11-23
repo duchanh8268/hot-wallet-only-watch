@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../chains/cardano/cardano_hot_plugin.dart';
 import '../chains/bitcoin/bitcoin_hot_plugin.dart';
 import '../chains/bitcoin/models/btc_profile.dart';
+import '../chains/bitcoin/services/btc_hd_sync_service.dart';
 import '../chains/bitcoin/services/mempool_service.dart';
 import '../chains/evm/evm_hot_plugin.dart';
 import '../chains/evm/models/evm_profile.dart';
@@ -60,6 +61,7 @@ class HotAppState extends ChangeNotifier {
   final List<BtcWatchOnlyProfile> _btcProfiles = [];
   String? _activeBtcProfileId;
   Map<String, dynamic>? _btcAccountState;
+  BtcWalletSyncState? _btcSyncState;
   bool _btcLoading = false;
   String? _btcError;
 
@@ -539,6 +541,7 @@ class HotAppState extends ChangeNotifier {
   }
 
   Map<String, dynamic>? get btcAccountState => _btcAccountState;
+  BtcWalletSyncState? get btcSyncState => _btcSyncState;
   bool get btcLoading => _btcLoading;
   String? get btcError => _btcError;
 
@@ -595,6 +598,7 @@ class HotAppState extends ChangeNotifier {
       await refreshBtcState();
     } else {
       _btcAccountState = null;
+      _btcSyncState = null;
       notifyListeners();
     }
   }
@@ -603,6 +607,7 @@ class HotAppState extends ChangeNotifier {
     final profile = activeBtcProfile;
     if (profile == null) {
       _btcAccountState = null;
+      _btcSyncState = null;
       notifyListeners();
       return;
     }
@@ -610,12 +615,27 @@ class HotAppState extends ChangeNotifier {
     _btcError = null;
     notifyListeners();
     try {
-      final plugin = BitcoinHotPlugin.instance;
-      final state = await plugin.fetchAccountBalance(
-        network: activeChainNetwork,
-        address: profile.receiveAddress,
+      final hdSync = BtcHdWalletSyncService(BitcoinHotPlugin.instance.mempoolService);
+      final synced = await hdSync.syncProfile(
+        profile: profile,
+        networkId: activeChainNetwork.id,
+        gapLimit: _gapLimit,
       );
-      _btcAccountState = state;
+      _btcSyncState = synced;
+      _btcAccountState = {
+        'address': synced.nextUnusedExternalAddress,
+        'primaryReceiveAddress': synced.primaryReceiveAddress,
+        'nextUnusedChangeAddress': synced.nextUnusedChangeAddress,
+        'nextUnusedChangeIndex': synced.nextUnusedChangeIndex,
+        'isHdSynced': synced.isHdSynced,
+        'network': activeChainNetwork.id,
+        'balanceSat': synced.totalSat.toString(),
+        'utxos': [for (final u in synced.utxos) u.utxo],
+        'derivedUtxos': synced.utxos,
+        'utxoCount': synced.utxos.length,
+        'recentTxs': synced.recentTxs,
+        'historyError': ?synced.historyError,
+      };
     } catch (e) {
       _btcError = e.toString();
     } finally {
@@ -634,42 +654,70 @@ class HotAppState extends ChangeNotifier {
     }
     final profile = activeBtcProfile;
     final address = profile?.receiveAddress ?? 'tb1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu';
+    final demoUtxo0 = MempoolUtxo(
+      txid: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b',
+      vout: 0,
+      valueSat: BigInt.from(1000000), // 0.01 BTC
+      confirmed: true,
+      blockHeight: 850123,
+    );
+    final demoUtxo1 = MempoolUtxo(
+      txid: '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
+      vout: 1,
+      valueSat: BigInt.from(500000), // 0.005 BTC
+      confirmed: true,
+      blockHeight: 850130,
+    );
+    final demoDerived = [
+      BtcDerivedUtxo(
+        utxo: demoUtxo0,
+        accountIndex: profile?.accountIndex ?? 0,
+        change: 0,
+        addressIndex: 0,
+        address: address,
+      ),
+      BtcDerivedUtxo(
+        utxo: demoUtxo1,
+        accountIndex: profile?.accountIndex ?? 0,
+        change: 1,
+        addressIndex: 0,
+        address: address,
+      ),
+    ];
+    final demoRecent = [
+      ChainTxRecord(
+        txHash: '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
+        timestampMs: 1730005000000,
+        status: 'confirmed',
+        direction: 'in',
+        summary: '+0.00500000 BTC',
+        blockOrSlot: 'Block #850130',
+        explorerUrl: MempoolService.explorerTxUrl(
+          activeChainNetwork.id,
+          '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
+        ),
+      ),
+    ];
+    _btcSyncState = BtcWalletSyncState(
+      totalSat: BigInt.from(1500000),
+      utxos: demoDerived,
+      primaryReceiveAddress: address,
+      nextUnusedExternalAddress: address,
+      nextUnusedExternalIndex: 0,
+      nextUnusedChangeAddress: address,
+      nextUnusedChangeIndex: 1,
+      recentTxs: demoRecent,
+      isHdSynced: profile?.hasAccountXpub ?? false,
+    );
     _btcError = null;
     _btcAccountState = {
       'address': address,
       'network': activeChainNetwork.id,
       'balanceSat': '1500000', // 0.015 BTC
       'utxoCount': 2,
-      'utxos': [
-        MempoolUtxo(
-          txid: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b',
-          vout: 0,
-          valueSat: BigInt.from(1000000), // 0.01 BTC
-          confirmed: true,
-          blockHeight: 850123,
-        ),
-        MempoolUtxo(
-          txid: '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
-          vout: 1,
-          valueSat: BigInt.from(500000), // 0.005 BTC
-          confirmed: true,
-          blockHeight: 850130,
-        ),
-      ],
-      'recentTxs': [
-        ChainTxRecord(
-          txHash: '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
-          timestampMs: 1730005000000,
-          status: 'confirmed',
-          direction: 'in',
-          summary: '+0.00500000 BTC',
-          blockOrSlot: 'Block #850130',
-          explorerUrl: MempoolService.explorerTxUrl(
-            activeChainNetwork.id,
-            '9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e',
-          ),
-        ),
-      ],
+      'utxos': [demoUtxo0, demoUtxo1],
+      'derivedUtxos': demoDerived,
+      'recentTxs': demoRecent,
     };
     notifyListeners();
   }
