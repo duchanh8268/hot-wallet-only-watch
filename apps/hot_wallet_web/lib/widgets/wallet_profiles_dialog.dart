@@ -287,10 +287,12 @@ class _WalletProfilesDialog extends StatelessWidget {
         case ChainId.hyperliquid:
           String address;
           int accountIndex = 0;
+          int addressIndex = 0;
           if (trimmed.toLowerCase().startsWith('ur:eth-account')) {
             final ur = EthAccountUr.fromUr(trimmed);
             address = ur.address;
             accountIndex = ur.accountIndex;
+            addressIndex = ur.addressIndex;
           } else if (trimmed.startsWith('0x') && trimmed.length == 42) {
             address = Eip55.toChecksumAddress(trimmed);
           } else {
@@ -308,6 +310,7 @@ class _WalletProfilesDialog extends StatelessWidget {
             address: address,
             networkId: appState.activeChainNetwork.id,
             accountIndex: accountIndex,
+            addressIndex: addressIndex,
           );
           return true;
 

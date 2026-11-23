@@ -151,11 +151,13 @@ class _EvmDashboardScreenState extends State<EvmDashboardScreen> {
     try {
       String address;
       int accountIndex = 0;
+      int addressIndex = 0;
 
       if (code.toLowerCase().startsWith('ur:eth-account')) {
         final ur = EthAccountUr.fromUr(code);
         address = ur.address;
         accountIndex = ur.accountIndex;
+        addressIndex = ur.addressIndex;
       } else if (code.startsWith('0x') && (code.length == 42)) {
         address = Eip55.toChecksumAddress(code);
       } else {
@@ -171,6 +173,7 @@ class _EvmDashboardScreenState extends State<EvmDashboardScreen> {
         address: address,
         networkId: appState.activeChainNetwork.id,
         accountIndex: accountIndex,
+        addressIndex: addressIndex,
       );
       onSuccess();
     } catch (e) {
@@ -350,7 +353,7 @@ class _EvmDashboardScreenState extends State<EvmDashboardScreen> {
           payloadType: EthPayloadType.eip712,
           rawPayload: Uint8List.fromList(utf8.encode(jsonEncode(typedData.toJson()))),
           accountIndex: profile.accountIndex,
-          addressIndex: 0,
+          addressIndex: profile.addressIndex,
           metadata: {
             'actionType': 'usdSend',
             'destination': to,
@@ -384,7 +387,7 @@ class _EvmDashboardScreenState extends State<EvmDashboardScreen> {
           payloadType: EthPayloadType.eip1559,
           rawPayload: tx.unsignedSigningBytes,
           accountIndex: profile.accountIndex,
-          addressIndex: 0,
+          addressIndex: profile.addressIndex,
           metadata: {
             'chainId': tx.chainId,
             'to': tx.to,

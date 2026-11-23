@@ -8,6 +8,7 @@ class EvmWatchOnlyProfile {
   final String networkId;
   final String address;
   final int accountIndex;
+  final int addressIndex;
 
   const EvmWatchOnlyProfile({
     required this.id,
@@ -16,6 +17,7 @@ class EvmWatchOnlyProfile {
     required this.networkId,
     required this.address,
     this.accountIndex = 0,
+    this.addressIndex = 0,
   });
 
   EvmWatchOnlyProfile copyWith({
@@ -23,6 +25,7 @@ class EvmWatchOnlyProfile {
     String? networkId,
     String? address,
     int? accountIndex,
+    int? addressIndex,
   }) =>
       EvmWatchOnlyProfile(
         id: id,
@@ -31,6 +34,7 @@ class EvmWatchOnlyProfile {
         networkId: networkId ?? this.networkId,
         address: address ?? this.address,
         accountIndex: accountIndex ?? this.accountIndex,
+        addressIndex: addressIndex ?? this.addressIndex,
       );
 
   Map<String, dynamic> toJson() => {
@@ -40,6 +44,7 @@ class EvmWatchOnlyProfile {
         'networkId': networkId,
         'address': address,
         'accountIndex': accountIndex,
+        'addressIndex': addressIndex,
       };
 
   factory EvmWatchOnlyProfile.fromJson(Map<String, dynamic> json) =>
@@ -52,5 +57,6 @@ class EvmWatchOnlyProfile {
         networkId: json['networkId'] as String? ?? 'mainnet',
         address: json['address'] as String,
         accountIndex: (json['accountIndex'] as num?)?.toInt() ?? 0,
+        addressIndex: (json['addressIndex'] as num?)?.toInt() ?? 0,
       );
 }

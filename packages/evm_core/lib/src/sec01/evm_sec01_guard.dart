@@ -27,14 +27,28 @@ class EvmSec01Guard {
     required int expectedAddressIndex,
     String? expectedNetwork,
     String? expectedChain,
+    bool allowMultiAccount = false,
   }) {
-    if (request.accountIndex != expectedAccountIndex ||
-        request.addressIndex != expectedAddressIndex) {
+    if (request.accountIndex < 0 ||
+        request.accountIndex >= 0x80000000 ||
+        request.addressIndex < 0 ||
+        request.addressIndex >= 0x80000000) {
+      return AuditVerdict.rejected(
+        'Chỉ số dẫn xuất trong yêu cầu (account=${request.accountIndex}, address=${request.addressIndex}) nằm ngoài phạm vi hợp lệ',
+      );
+    }
+
+    if (!allowMultiAccount &&
+        (request.accountIndex != expectedAccountIndex ||
+            request.addressIndex != expectedAddressIndex)) {
       return AuditVerdict.rejected(
         'Chỉ số dẫn xuất trong yêu cầu (account=${request.accountIndex}, address=${request.addressIndex}) '
         'không khớp với ví đang mở (account=$expectedAccountIndex, address=$expectedAddressIndex)',
       );
     }
+
+    final effectiveAccountIndex = allowMultiAccount ? request.accountIndex : expectedAccountIndex;
+    final effectiveAddressIndex = allowMultiAccount ? request.addressIndex : expectedAddressIndex;
 
     final normalizedChain = request.chain.trim().toLowerCase();
     final normalizedNetwork = request.network.trim().toLowerCase();
@@ -63,21 +77,37 @@ class EvmSec01Guard {
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final masterHd = EvmHdKey.fromSeed(seed);
     final childKey = masterHd.deriveEvmAccount(
-      accountIndex: expectedAccountIndex,
-      addressIndex: expectedAddressIndex,
+      accountIndex: effectiveAccountIndex,
+      addressIndex: effectiveAddressIndex,
     );
     final myAddress = Eip55.addressFromPublicKey64(childKey.publicKey64);
+    final derivationPath = "m/44'/60'/$effectiveAccountIndex'/0/$effectiveAddressIndex";
 
     try {
+      final AuditVerdict verdict;
       if (request.payloadType == EthPayloadType.eip1559) {
-        return _auditEip1559(request, myAddress, normalizedChain, normalizedNetwork);
+        verdict = _auditEip1559(request, myAddress, normalizedChain, normalizedNetwork);
       } else if (request.payloadType == EthPayloadType.legacy) {
-        return _auditLegacy(request, myAddress, normalizedChain, normalizedNetwork);
+        verdict = _auditLegacy(request, myAddress, normalizedChain, normalizedNetwork);
       } else if (request.payloadType == EthPayloadType.eip712) {
-        return _auditEip712(request, myAddress, normalizedChain, normalizedNetwork);
+        verdict = _auditEip712(request, myAddress, normalizedChain, normalizedNetwork);
       } else {
         return AuditVerdict.rejected('Unsupported payload type: ${request.payloadType}');
       }
+      if (!verdict.isApproved) return verdict;
+      return AuditVerdict(
+        isApproved: true,
+        recipientAddress: verdict.recipientAddress,
+        amountDisplay: verdict.amountDisplay,
+        feeDisplay: verdict.feeDisplay,
+        networkDisplay: verdict.networkDisplay,
+        isHighRiskContractCall: verdict.isHighRiskContractCall,
+        warnings: verdict.warnings,
+        extraDetails: {
+          'Derivation Path': derivationPath,
+          ...verdict.extraDetails,
+        },
+      );
     } finally {
       masterHd.dispose();
       childKey.dispose();

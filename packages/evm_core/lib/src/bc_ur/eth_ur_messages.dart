@@ -11,6 +11,7 @@ class EthAccountUr {
   final String network; // 'mainnet', 'sepolia', 'testnet'
   final String address;
   final int accountIndex;
+  final int addressIndex;
   final String? label;
 
   EthAccountUr({
@@ -19,6 +20,7 @@ class EthAccountUr {
     required this.network,
     required this.address,
     this.accountIndex = 0,
+    this.addressIndex = 0,
     this.label,
   });
 
@@ -32,6 +34,9 @@ class EthAccountUr {
     ];
     if (label != null && label!.isNotEmpty) {
       entries.add(CborMapEntry(CborInt.fromInt(6), CborText(label!)));
+    }
+    if (addressIndex != 0) {
+      entries.add(CborMapEntry(CborInt.fromInt(7), CborInt.fromInt(addressIndex)));
     }
     return CborMap(entries).encode();
   }
@@ -50,6 +55,7 @@ class EthAccountUr {
     final addr = root.getByIntKey(4);
     final idx = root.getByIntKey(5);
     final lbl = root.getByIntKey(6);
+    final addrIdx = root.getByIntKey(7);
 
     if (ver is! CborInt || ch is! CborText || net is! CborText || addr is! CborText) {
       throw const FormatException('Missing required fields in eth-account');
@@ -61,6 +67,7 @@ class EthAccountUr {
       network: net.text,
       address: addr.text,
       accountIndex: idx is CborInt ? idx.toInt() : 0,
+      addressIndex: addrIdx is CborInt ? addrIdx.toInt() : 0,
       label: lbl is CborText ? lbl.text : null,
     );
   }

@@ -508,5 +508,108 @@ void main() {
       expect(badMsgVerdict.isApproved, isFalse);
       expect(badMsgVerdict.rejectReason, contains('Message'));
     });
+
+    test('EthAccountUr preserves addressIndex and EvmSec01Guard supports allowMultiAccount', () {
+      // Zero addressIndex defaults cleanly; non-zero round-trips through UR
+      final master = EvmHdKey.fromSeed(Bip39.entropyToSeed(entropy));
+      final childKey = master.deriveEvmAccount(accountIndex: 2, addressIndex: 3);
+      final childAddress = Eip55.addressFromPublicKey64(childKey.publicKey64);
+
+      final urZero = EthAccountUr(
+        chain: 'ethereum',
+        network: 'mainnet',
+        address: childAddress,
+        accountIndex: 0,
+        addressIndex: 0,
+      ).toUr();
+      final decodedZero = EthAccountUr.fromUr(urZero);
+      expect(decodedZero.addressIndex, equals(0));
+
+      final urNonZero = EthAccountUr(
+        chain: 'ethereum',
+        network: 'mainnet',
+        address: childAddress,
+        accountIndex: 2,
+        addressIndex: 3,
+      ).toUr();
+      final decodedNonZero = EthAccountUr.fromUr(urNonZero);
+      expect(decodedNonZero.accountIndex, equals(2));
+      expect(decodedNonZero.addressIndex, equals(3));
+
+      final tx = Eip1559Transaction(
+        chainId: 1,
+        nonce: BigInt.from(7),
+        maxPriorityFeePerGas: BigInt.from(2000000000),
+        maxFeePerGas: BigInt.from(30000000000),
+        gasLimit: BigInt.from(21000),
+        to: '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+        value: BigInt.from(500000000000000000),
+      );
+      final req = EthSignRequestUr(
+        requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+        chain: 'ethereum',
+        network: 'mainnet',
+        payloadType: EthPayloadType.eip1559,
+        rawPayload: tx.unsignedSigningBytes,
+        accountIndex: 2,
+        addressIndex: 3,
+      );
+
+      // Default allowMultiAccount: false still rejects mismatch
+      final strictReject = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+      );
+      expect(strictReject.isApproved, isFalse);
+
+      // allowMultiAccount: true accepts and exposes resolved Derivation Path
+      final multiApprove = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+        allowMultiAccount: true,
+      );
+      expect(multiApprove.isApproved, isTrue);
+      expect(multiApprove.extraDetails['Derivation Path'], equals("m/44'/60'/2'/0/3"));
+
+      // Still enforces expectedNetwork even with allowMultiAccount: true
+      final netMismatch = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'sepolia',
+        allowMultiAccount: true,
+      );
+      expect(netMismatch.isApproved, isFalse);
+
+      // Rejects negative index even with allowMultiAccount: true
+      final badIdxReq = EthSignRequestUr(
+        requestId: hexDecode('0123456789abcdef0123456789abcdef'),
+        chain: 'ethereum',
+        network: 'mainnet',
+        payloadType: EthPayloadType.eip1559,
+        rawPayload: tx.unsignedSigningBytes,
+        accountIndex: -1,
+        addressIndex: 0,
+      );
+      final badIdxVerdict = EvmSec01Guard.audit(
+        entropy: entropy,
+        request: badIdxReq,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+        allowMultiAccount: true,
+      );
+      expect(badIdxVerdict.isApproved, isFalse);
+
+      childKey.dispose();
+      master.dispose();
+    });
   });
 }

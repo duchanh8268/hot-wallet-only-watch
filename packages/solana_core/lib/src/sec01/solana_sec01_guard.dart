@@ -17,12 +17,20 @@ class SolanaSec01Guard {
     required SolSignRequestUr request,
     required int expectedAccountIndex,
     String? expectedNetwork,
+    bool allowMultiAccount = false,
   }) {
-    if (request.accountIndex != expectedAccountIndex) {
+    if (request.accountIndex < 0 || request.accountIndex >= 0x80000000) {
+      return AuditVerdict.rejected(
+        'AccountIndex trong yêu cầu (${request.accountIndex}) nằm ngoài phạm vi hợp lệ',
+      );
+    }
+    if (!allowMultiAccount && request.accountIndex != expectedAccountIndex) {
       return AuditVerdict.rejected(
         'AccountIndex trong yêu cầu (${request.accountIndex}) không khớp với ví đang mở ($expectedAccountIndex)',
       );
     }
+
+    final effectiveAccountIndex = allowMultiAccount ? request.accountIndex : expectedAccountIndex;
 
     if (expectedNetwork != null &&
         request.network.trim().toLowerCase() != expectedNetwork.trim().toLowerCase()) {
@@ -34,7 +42,7 @@ class SolanaSec01Guard {
 
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final master = Slip0010Key.fromSeed(seed);
-    final signerKey = master.deriveSolanaAccount(accountIndex: expectedAccountIndex);
+    final signerKey = master.deriveSolanaAccount(accountIndex: effectiveAccountIndex);
 
     try {
       final SolanaMessage message;
@@ -64,7 +72,7 @@ class SolanaSec01Guard {
       if (!signerMatches) {
         return AuditVerdict.rejected(
           'Tài khoản ký chính trong giao dịch (${Base58.encode(feePayerPubkey)}) '
-          'không khớp với ví đang mở (m/44\'/501\'/$expectedAccountIndex\'/0\': ${Base58.encode(expectedPubkey)})',
+          'không khớp với ví đang mở (m/44\'/501\'/$effectiveAccountIndex\'/0\': ${Base58.encode(expectedPubkey)})',
         );
       }
 
@@ -81,6 +89,7 @@ class SolanaSec01Guard {
       var totalLamports = BigInt.zero;
       final transfers = <({String to, BigInt lamports})>[];
       final extraDetails = <String, String>{
+        'Derivation Path': "m/44'/501'/$effectiveAccountIndex'/0'",
         'Người trả phí (Fee Payer)': Base58.encode(feePayerPubkey),
         'Recent Blockhash': Base58.encode(message.recentBlockhash),
         'Số lượng lệnh (Instructions)': '${message.instructions.length}',
@@ -207,6 +216,7 @@ class SolanaSec01Guard {
     required SolSignRequestUr request,
     required int expectedAccountIndex,
     String? expectedNetwork,
+    bool allowMultiAccount = false,
   }) {
     final verdict = audit(
       entropy: entropy,
@@ -214,15 +224,17 @@ class SolanaSec01Guard {
       request: request,
       expectedAccountIndex: expectedAccountIndex,
       expectedNetwork: expectedNetwork,
+      allowMultiAccount: allowMultiAccount,
     );
 
     if (!verdict.isApproved) {
       throw StateError(verdict.rejectReason ?? 'Giao dịch bị từ chối bởi kiểm toán SEC-01');
     }
 
+    final effectiveAccountIndex = allowMultiAccount ? request.accountIndex : expectedAccountIndex;
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final master = Slip0010Key.fromSeed(seed);
-    final signerKey = master.deriveSolanaAccount(accountIndex: expectedAccountIndex);
+    final signerKey = master.deriveSolanaAccount(accountIndex: effectiveAccountIndex);
 
     try {
       final sig = signerKey.sign(request.messageBytes);

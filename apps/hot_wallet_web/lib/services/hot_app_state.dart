@@ -449,6 +449,7 @@ class HotAppState extends ChangeNotifier {
     required String address,
     String networkId = 'mainnet',
     int accountIndex = 0,
+    int addressIndex = 0,
   }) async {
     final id = '${chainId.id}_${DateTime.now().microsecondsSinceEpoch}';
     final profile = EvmWatchOnlyProfile(
@@ -458,6 +459,7 @@ class HotAppState extends ChangeNotifier {
       networkId: networkId,
       address: address.trim(),
       accountIndex: accountIndex,
+      addressIndex: addressIndex,
     );
     _evmProfiles.add(profile);
     _activeEvmProfileId = profile.id;

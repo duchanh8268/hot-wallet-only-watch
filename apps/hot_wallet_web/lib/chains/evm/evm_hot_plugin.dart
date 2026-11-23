@@ -73,6 +73,7 @@ class EvmHotPlugin implements IHotChainPlugin {
         network: network.id,
         address: address,
         accountIndex: accountIndex,
+        addressIndex: addressIndex,
         label: label,
       ).toUr();
 

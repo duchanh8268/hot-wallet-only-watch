@@ -316,8 +316,59 @@ void main() {
       );
       expect(acctMismatch.isApproved, isFalse);
 
+      // 5. allowMultiAccount: true resolves accountIndex 2 and signs with derived key 2
+      final key2 = master.deriveSolanaAccount(accountIndex: 2);
+      final solRecipient = Uint8List.fromList(List.filled(32, 0x33));
+      final msg2 = SolanaMessage.compile(
+        feePayer: key2.publicKey,
+        recentBlockhash: blockhash,
+        instructions: [
+          SystemProgram.transfer(
+            fromPubkey: key2.publicKey,
+            toPubkey: solRecipient,
+            lamports: BigInt.from(250000000),
+          ),
+        ],
+      );
+      final req2 = SolSignRequestUr(
+        requestId: Uint8List(16),
+        chain: 'solana',
+        network: 'mainnet-beta',
+        messageBytes: msg2.serialize(),
+        accountIndex: 2,
+      );
+      final multiAcctVerdict = SolanaSec01Guard.audit(
+        entropy: entropy,
+        request: req2,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet-beta',
+        allowMultiAccount: true,
+      );
+      expect(multiAcctVerdict.isApproved, isTrue);
+      expect(multiAcctVerdict.extraDetails['Derivation Path'], equals("m/44'/501'/2'/0'"));
+
+      final multiResp = SolanaSec01Guard.auditAndSign(
+        entropy: entropy,
+        request: req2,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'mainnet-beta',
+        allowMultiAccount: true,
+      );
+      expect(multiResp.signature.length, equals(64));
+
+      // Still enforces expectedNetwork with allowMultiAccount: true
+      final multiNetMismatch = SolanaSec01Guard.audit(
+        entropy: entropy,
+        request: req2,
+        expectedAccountIndex: 0,
+        expectedNetwork: 'devnet',
+        allowMultiAccount: true,
+      );
+      expect(multiNetMismatch.isApproved, isFalse);
+
       master.dispose();
       key0.dispose();
+      key2.dispose();
     });
   });
 }

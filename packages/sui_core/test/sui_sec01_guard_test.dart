@@ -348,5 +348,77 @@ void main() {
       expect(splitVerdict.extraDetails['Transfer #1.0'], contains('10.0000 SUI'));
       expect(splitVerdict.extraDetails['Transfer #1.1'], contains('10.0000 SUI'));
     });
+
+    test('Supports allowMultiAccount across arbitrary accountIndex and addressIndex', () {
+      final master = SuiSlip0010Key.fromSeed(Bip39.entropyToSeed(entropy));
+      final key12 = master.deriveSuiAccount(accountIndex: 1, addressIndex: 2);
+      final recipient = '0x4444444444444444444444444444444444444444444444444444444444444444';
+      final gasRef = SuiObjectRef(
+        objectId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+        version: BigInt.one,
+        digest: '0x3333333333333333333333333333333333333333333333333333333333333333',
+      );
+      final txData = SuiTransactionData.createTransfer(
+        sender: key12.suiAddress,
+        recipient: recipient,
+        amountMIST: BigInt.from(1500000000),
+        gasPayment: [gasRef],
+        gasBudget: BigInt.from(5000000),
+      );
+      final req = SuiSignRequestUr(
+        requestId: Uint8List(16),
+        chain: 'sui',
+        network: 'mainnet',
+        txBytes: txData.toBcs(),
+        accountIndex: 1,
+        addressIndex: 2,
+      );
+
+      // Strict mode rejects mismatch
+      final strictVerdict = SuiSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+      );
+      expect(strictVerdict.isApproved, isFalse);
+
+      // Multi-account mode approves and signs with derived key (1, 2)
+      final multiVerdict = SuiSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+        allowMultiAccount: true,
+      );
+      expect(multiVerdict.isApproved, isTrue);
+      expect(multiVerdict.extraDetails['Derivation Path'], equals("m/44'/784'/1'/0'/2'"));
+
+      final resp = SuiSec01Guard.auditAndSign(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'mainnet',
+        allowMultiAccount: true,
+      );
+      expect(resp.signature.length, equals(64));
+
+      // Still enforces expectedNetwork
+      final netMismatch = SuiSec01Guard.audit(
+        entropy: entropy,
+        request: req,
+        expectedAccountIndex: 0,
+        expectedAddressIndex: 0,
+        expectedNetwork: 'testnet',
+        allowMultiAccount: true,
+      );
+      expect(netMismatch.isApproved, isFalse);
+
+      master.dispose();
+      key12.dispose();
+    });
   });
 }

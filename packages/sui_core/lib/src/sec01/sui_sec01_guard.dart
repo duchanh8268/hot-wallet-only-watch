@@ -18,14 +18,28 @@ class SuiSec01Guard {
     required int expectedAccountIndex,
     int expectedAddressIndex = 0,
     String? expectedNetwork,
+    bool allowMultiAccount = false,
   }) {
-    if (request.accountIndex != expectedAccountIndex ||
-        request.addressIndex != expectedAddressIndex) {
+    if (request.accountIndex < 0 ||
+        request.accountIndex >= 0x80000000 ||
+        request.addressIndex < 0 ||
+        request.addressIndex >= 0x80000000) {
+      return AuditVerdict.rejected(
+        'Chỉ số dẫn xuất trong yêu cầu (account=${request.accountIndex}, address=${request.addressIndex}) nằm ngoài phạm vi hợp lệ',
+      );
+    }
+
+    if (!allowMultiAccount &&
+        (request.accountIndex != expectedAccountIndex ||
+            request.addressIndex != expectedAddressIndex)) {
       return AuditVerdict.rejected(
         'Chỉ số dẫn xuất trong yêu cầu (account=${request.accountIndex}, address=${request.addressIndex}) '
         'không khớp với ví đang mở (account=$expectedAccountIndex, address=$expectedAddressIndex)',
       );
     }
+
+    final effectiveAccountIndex = allowMultiAccount ? request.accountIndex : expectedAccountIndex;
+    final effectiveAddressIndex = allowMultiAccount ? request.addressIndex : expectedAddressIndex;
 
     if (expectedNetwork != null &&
         request.network.trim().toLowerCase() != expectedNetwork.trim().toLowerCase()) {
@@ -38,8 +52,8 @@ class SuiSec01Guard {
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final master = SuiSlip0010Key.fromSeed(seed);
     final signerKey = master.deriveSuiAccount(
-      accountIndex: expectedAccountIndex,
-      addressIndex: expectedAddressIndex,
+      accountIndex: effectiveAccountIndex,
+      addressIndex: effectiveAddressIndex,
     );
 
     try {
@@ -65,7 +79,7 @@ class SuiSec01Guard {
       if (sender != expectedAddress) {
         return AuditVerdict.rejected(
           'Người gửi trong giao dịch ($sender) không khớp với ví '
-          '(m/44\'/784\'/$expectedAccountIndex\'/0\'/$expectedAddressIndex\': $expectedAddress)',
+          '(m/44\'/784\'/$effectiveAccountIndex\'/0\'/$effectiveAddressIndex\': $expectedAddress)',
         );
       }
 
@@ -98,6 +112,7 @@ class SuiSec01Guard {
       final splitCmdInfos = <int, _SuiSplitInfo>{};
       final recipients = <String>[];
       final extraDetails = <String, String>{
+        'Derivation Path': "m/44'/784'/$effectiveAccountIndex'/0'/$effectiveAddressIndex'",
         'Người gửi (Sender)': txData.v1.sender,
         'Ngân sách Gas (Budget)': '${_formatNumber(gasBudget)} MIST',
         'Giá Gas': '${_formatNumber(txData.v1.gasData.price)} MIST',
@@ -386,6 +401,7 @@ class SuiSec01Guard {
     required int expectedAccountIndex,
     int expectedAddressIndex = 0,
     String? expectedNetwork,
+    bool allowMultiAccount = false,
   }) {
     final verdict = audit(
       entropy: entropy,
@@ -394,17 +410,20 @@ class SuiSec01Guard {
       expectedAccountIndex: expectedAccountIndex,
       expectedAddressIndex: expectedAddressIndex,
       expectedNetwork: expectedNetwork,
+      allowMultiAccount: allowMultiAccount,
     );
 
     if (!verdict.isApproved) {
       throw StateError(verdict.rejectReason ?? 'Giao dịch bị từ chối bởi kiểm toán SEC-01');
     }
 
+    final effectiveAccountIndex = allowMultiAccount ? request.accountIndex : expectedAccountIndex;
+    final effectiveAddressIndex = allowMultiAccount ? request.addressIndex : expectedAddressIndex;
     final seed = Bip39.entropyToSeed(entropy, passphrase: passphrase);
     final master = SuiSlip0010Key.fromSeed(seed);
     final signerKey = master.deriveSuiAccount(
-      accountIndex: expectedAccountIndex,
-      addressIndex: expectedAddressIndex,
+      accountIndex: effectiveAccountIndex,
+      addressIndex: effectiveAddressIndex,
     );
 
     try {

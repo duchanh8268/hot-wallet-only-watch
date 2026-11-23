@@ -5,6 +5,7 @@ import 'package:chain_core_interface/chain_core_interface.dart';
 import 'package:evm_core/evm_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hot_wallet_web/chains/evm/evm_hot_plugin.dart';
+import 'package:hot_wallet_web/chains/evm/models/evm_profile.dart';
 import 'package:hot_wallet_web/chains/evm/services/evm_rpc_service.dart';
 import 'package:hot_wallet_web/chains/evm/services/hyperliquid_service.dart';
 import 'package:hot_wallet_web/core/services/hot_chain_registry.dart';
@@ -123,6 +124,49 @@ void main() {
       expect(rpc.getRpcUrl('mainnet'), equals('https://custom-eth.example'));
       rpc.resetToDefaultRpcUrl('mainnet');
       expect(rpc.getRpcUrl('mainnet'), equals('https://ethereum-rpc.publicnode.com'));
+    });
+
+    test('EvmHotPlugin and EvmWatchOnlyProfile preserve non-zero addressIndex', () async {
+      final plugin = EvmHotPlugin.ethereum;
+      const mnemonic =
+          'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+      final entropy = Bip39.mnemonicToEntropy(mnemonic);
+      final acct = await plugin.derivePublicAccount(
+        entropy: entropy,
+        network: plugin.defaultNetwork,
+        accountIndex: 2,
+        addressIndex: 5,
+        label: 'Test',
+      );
+      final parsedUr = EthAccountUr.fromUr(acct.accountUr);
+      expect(parsedUr.accountIndex, equals(2));
+      expect(parsedUr.addressIndex, equals(5));
+
+      final profile = EvmWatchOnlyProfile(
+        id: 'eth_1',
+        name: 'Acct 2/5',
+        chainId: ChainId.ethereum,
+        networkId: 'mainnet',
+        address: acct.primaryAddress,
+        accountIndex: 2,
+        addressIndex: 5,
+      );
+      final roundTrip = EvmWatchOnlyProfile.fromJson(profile.toJson());
+      expect(roundTrip.accountIndex, equals(2));
+      expect(roundTrip.addressIndex, equals(5));
+
+      final copied = roundTrip.copyWith(addressIndex: 7);
+      expect(copied.addressIndex, equals(7));
+
+      final legacy = EvmWatchOnlyProfile.fromJson({
+        'id': 'eth_legacy',
+        'name': 'Legacy',
+        'chainId': 'ethereum',
+        'networkId': 'mainnet',
+        'address': acct.primaryAddress,
+        'accountIndex': 1,
+      });
+      expect(legacy.addressIndex, equals(0));
     });
   });
 }
